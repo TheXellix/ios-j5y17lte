@@ -1,0 +1,92 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index 6c7479b..5831cb2 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -41,6 +41,10 @@ bool j5_touch_probe(void);
+ #define IST_HIB_INTR_MSG     0xb00b0104u
+ #define IST_HIB_COORD        0xb00b0108u
+ #define IST_MAX_FINGERS      10
++#define IST_HIB_CMD          0xb00b013cu
++#define IST_IDLE_MSG         0x8ead8eadu    /* firmware not scanning */
++#define IST_CMD_FW_START     0x01u
++#define IST_CMD_MODE_SPECIAL 0x22u
+ 
+ static vm_offset_t j5t_i2c, j5t_hsi, j5t_alive;
+ static uint32_t j5t_max_x = 720, j5t_max_y = 1280, j5t_flags;
+@@ -294,6 +298,42 @@ fail:
+ 	return false;
+ }
+ 
++/* 4-byte register address + 4-byte value, one write message (Linux
++ * ist30xx_write_cmd), then the driver's 40 ms settle time. */
++static bool
++j5t_ist_write(uint32_t reg, uint32_t value)
++{
++	uint8_t a[8] = {(uint8_t)(reg >> 24), (uint8_t)(reg >> 16), (uint8_t)(reg >> 8), (uint8_t)reg,
++		(uint8_t)(value >> 24), (uint8_t)(value >> 16), (uint8_t)(value >> 8), (uint8_t)value};
++	bool ok = false;
++
++	for (unsigned n = 0; n < 5000 && (j5t_rd(j5t_i2c, IICSTAT) & 0x20u); n++) {
++		delay(1);
++	}
++	if (j5t_i2c_start(0xd0u, J5T_SLAVE << 1)) {
++		ok = true;
++		for (unsigned i = 0; i < 8 && ok; i++) {
++			j5t_wr(j5t_i2c, IICDS, a[i]);
++			delay(1);
++			j5t_i2c_clear();
++			ok = j5t_i2c_wait() && !(j5t_rd(j5t_i2c, IICSTAT) & 1u);
++		}
++	}
++	j5t_i2c_stop();
++	delay(40000);
++	return ok;
++}
++
++/* Linux ist30xx_start(): normal (non-TA) noise mode, then FW_START. */
++static bool
++j5t_ist_start_scan(void)
++{
++	bool a = j5t_ist_write(IST_HIB_CMD, IST_CMD_MODE_SPECIAL << 16);
++	bool b = j5t_ist_write(IST_HIB_CMD, (IST_CMD_FW_START << 16) | 1u);
++	printf("J5 TOUCH: start scan mode=%d fw_start=%d\n", a, b);
++	return a && b;
++}
++
+ /* ---- contacts ---- */
+ 
+ static void
+@@ -372,7 +412,7 @@ j5t_wait_ms(unsigned ms)
+ static void
+ j5t_thread(void *arg, wait_result_t result)
+ {
+-	unsigned tick = 0, errors = 0, events = 0;
++	unsigned tick = 0, errors = 0, events = 0, idle = 0;
+ 	(void)arg;
+ 	(void)result;
+ 	for (;;) {
+@@ -384,7 +424,12 @@ j5t_thread(void *arg, wait_result_t result)
+ 					printf("J5 TOUCH: read error %u stat=%#x\n", errors, j5t_rd(j5t_i2c, IICSTAT));
+ 				}
+ 				j5t_release_all();
+-			} else if ((msg & 0xc00u) == 0xc00u) {
++			} else if (msg == IST_IDLE_MSG) {
++				if (++idle == 100 || (idle % 3000) == 0) {
++					printf("J5 TOUCH: firmware idle (%#x), restarting scan\n", msg);
++					(void)j5t_ist_start_scan();
++				}
++			} else if ((msg & 0xc00u) == 0xc00u && ((msg >> 12) & 0xfu) <= IST_MAX_FINGERS) {
+ 				if (++events <= 4) {
+ 					printf("J5 TOUCH: event msg=%#x\n", msg);
+ 				}
+@@ -515,6 +560,10 @@ j5_touch_probe(void)
+ 	}
+ 	printf("J5 TOUCH: IST3038H status=%#x msg=%#x max=%ux%u flags=%#x\n",
+ 	    status, msg, j5t_max_x, j5t_max_y, j5t_flags);
++	(void)j5t_ist_start_scan();
++	if (j5t_ist_read(IST_HIB_TOUCH_STATUS, &status) && j5t_ist_read(IST_HIB_INTR_MSG, &msg)) {
++		printf("J5 TOUCH: after start status=%#x msg=%#x\n", status, msg);
++	}
+ 	if (kernel_thread_start(j5t_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	} else {

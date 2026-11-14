@@ -68,3 +68,7 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   (tsp_avdd was off after S-Boot); IST3038H acks 0x50 but reads fail
   (IICSTAT stuck 0xb0 / NACK 0x11) -> patch j5 0007 follows the Linux
   s3c2410 START / repeated START / STOP sequences.
+- 2026-11-14 boot 6 (patch j5 0007): I2C reads now succeed; HIB_INTR_MSG
+  returns 0x8ead8ead (firmware not scanning). Patch j5 0008 sends the Linux
+  ist30xx_start() commands (MODE_SPECIAL 0, FW_START 1) to HIB_CMD
+  0xb00b013c and ignores the idle value.
