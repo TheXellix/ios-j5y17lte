@@ -7,6 +7,8 @@
 #include "display_console.h"
 #include "watchdog.h"
 
+extern char _start[];
+
 #define LOG_BASE 0x469ff000UL
 #define RAM_BASE 0x80000000UL
 #ifndef A5XELTE_RAM_MIB
@@ -149,7 +151,23 @@ uintptr_t a5_prepare_xnu(uintptr_t fdt, volatile uint64_t *log)
     log[24] = *(volatile uint32_t *)0x10170008UL;
     uint64_t rd_start, rd_end;
     log[10] = (uint64_t)-1;
-    if (!fdt_chosen_u64(fdt, "linux,initrd-start", &rd_start) ||
+    /* J5 S-Boot rejects large ramdisks ("invalid ramdisk length") but loads
+     * kernels of 19 MB. tools/j5-pack-probe.py --embed appends the payload to
+     * this loader: header "J5EMBED\0" + u64 length at +64 KiB, payload at
+     * +68 KiB. Fall back to the FDT initrd range otherwise. */
+    const volatile char *embed = (const volatile char *)((uintptr_t)_start + 0x10000);
+    static const char embed_magic[8] = {'J', '5', 'E', 'M', 'B', 'E', 'D', 0};
+    int embedded = 1;
+    for (unsigned i = 0; i < 8; ++i)
+        if (embed[i] != embed_magic[i])
+            embedded = 0;
+    if (embedded) {
+        rd_start = (uintptr_t)_start + 0x11000;
+        rd_end = rd_start + *(const volatile uint64_t *)(embed + 8);
+        log[20] = 0x4a35454d42ULL; /* "J5EMB": payload taken from the loader */
+        if (rd_end > RAM_END || rd_end <= rd_start)
+            return 0;
+    } else if (!fdt_chosen_u64(fdt, "linux,initrd-start", &rd_start) ||
         !fdt_chosen_u64(fdt, "linux,initrd-end", &rd_end) ||
         rd_start < 0x40000000ULL || rd_end > RAM_END || rd_end <= rd_start)
         return 0;

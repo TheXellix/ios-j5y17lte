@@ -121,11 +121,19 @@ def main():
     ap.add_argument("output_boot", type=Path)
     ap.add_argument("--ramdisk", type=Path,
                     help="replace the reference ramdisk with an XNU payload")
+    ap.add_argument("--embed", type=Path,
+                    help="append an XNU payload to the loader (kernel slot); J5 S-Boot rejects large ramdisks")
     args = ap.parse_args()
     if args.output_boot.exists():
         raise SystemExit("output exists; choose a new private path")
     ref = args.reference_boot.read_bytes()
     probe = args.probe_image.read_bytes()
+    if args.embed:
+        payload = args.embed.read_bytes()
+        if len(probe) > 0x10000:
+            raise SystemExit("loader larger than the 64 KiB embed offset")
+        probe = (probe + b"\0" * (0x10000 - len(probe)) + b"J5EMBED\0" +
+                 struct.pack("<Q", len(payload)) + b"\0" * (0x1000 - 16) + payload)
     if ref[:8] != b"ANDROID!":
         raise SystemExit("reference is not an Android BOOT image")
     fields = struct.unpack_from("<10I", ref, 8)
