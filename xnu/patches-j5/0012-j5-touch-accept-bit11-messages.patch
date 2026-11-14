@@ -1,0 +1,32 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index e2d43b7..bc179b7 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -11,7 +11,7 @@
+  *   attention  GPA0-6, active low (read only, polled)
+  *   protocol   drivers/input/touchscreen/imagis_30xxc: 4-byte big-endian
+  *              register address, repeated start, 4-byte big-endian value.
+- *              HIB_INTR_MSG: (msg & 0xc00) == 0xc00 valid, finger count
++ *              HIB_INTR_MSG: bit 11 set = touch report, finger count
+  *              [15:12], finger status [9:0]; HIB_COORD + 4 * i: y [11:0],
+  *              x [23:12], area [27:24], id [31:28] (1-based).
+  *
+@@ -461,12 +461,15 @@ j5t_thread(void *arg, wait_result_t result)
+ 						last_frame = st >> 20;
+ 					}
+ 				}
+-			} else if ((msg & 0xc00u) == 0xc00u && ((msg >> 12) & 0xfu) <= IST_MAX_FINGERS) {
+-				if (++events <= 4) {
++			} else if ((msg & 0x800u) && ((msg >> 12) & 0xfu) <= IST_MAX_FINGERS) {
++				/* This IST3038H firmware sets only bit 11 (observed under the
++				 * working Linux driver: 0x..001801 one finger, 0x08000800
++				 * release); bits [31:24] change per message. */
++				if (++events <= 8) {
+ 					printf("J5 TOUCH: event msg=%#x\n", msg);
+ 				}
+ 				j5t_report(msg);
+-			} else if (msg == 0 || (msg & 0xc00u) != 0xc00u) {
++			} else {
+ 				/* No valid contact message: nothing is down. */
+ 				bool any = false;
+ 				for (unsigned s = 0; s < IST_MAX_FINGERS; s++) {

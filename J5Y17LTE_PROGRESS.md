@@ -86,3 +86,9 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   counter runs (0x02200075, 0x04600075), as under Linux. 0x8ead8ead only
   means no message since boot; the 0009 idle reset was wrong. Patch j5 0011
   resets only when the status frame counter stops.
+- boot 10 (kernel run 10): user touched corners and swiped, no events: the
+  driver required (msg & 0xc00) == 0xc00 like the 30xxc header. Live capture
+  under Linux with j5-isttool: touch messages are 0x..001801 (count 1,
+  finger 1, bit 11 only, top byte varies), release 0x08000800; coordinates
+  0x11xxxyyy (id [31:28], x [23:12], y [11:0]) in 720x1280 panel pixels.
+  Patch j5 0012 accepts bit-11 messages.
