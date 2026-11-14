@@ -1,0 +1,191 @@
+diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
+index 1afc1d4..e68ca6d 100644
+--- a/bsd/dev/a5xelte_emmc.c
++++ b/bsd/dev/a5xelte_emmc.c
+@@ -19,6 +19,7 @@
+ #include <sys/uio.h>
+ #include <miscfs/devfs/devfs.h>
+ #include <kern/locks.h>
++extern void delay(int usec);
+ #include <kern/clock.h>
+ #include <kern/sched_prim.h>
+ #include <pexpert/pexpert.h>
+@@ -113,7 +114,7 @@ emmc_wr(uint32_t off, uint32_t value)
+ }
+ 
+ static int
+-emmc_read_sector(uint32_t lba, uint8_t *sector)
++emmc_read_sector_once(uint32_t lba, uint8_t *sector)
+ {
+ 	uint64_t data[64] = { 0 };
+ 	uint32_t hcon = emmc_rd(EMMC_HCON);
+@@ -212,6 +213,36 @@ out:
+ 	return error;
+ }
+ 
++/*
++ * j5y17lte: Exynos7870 reports occasional HTO (data starvation by host
++ * timeout, RINTSTS bit 10) on polled CMD17 when the reading thread is
++ * delayed before it drains the FIFO. The sector is intact on the card: reset
++ * the FIFO and reissue the command instead of failing the page-in, which
++ * otherwise reaches user space as SIGBUS (KERN_MEMORY_ERROR).
++ */
++static unsigned int emmc_read_retries, emmc_read_recovered;
++
++static int
++emmc_read_sector(uint32_t lba, uint8_t *sector)
++{
++	int error = 0;
++	for (unsigned int attempt = 0; attempt < 8; attempt++) {
++		error = emmc_read_sector_once(lba, sector);
++		if (error != EIO && error != ETIMEDOUT) {
++			if (attempt != 0 && error == 0) {
++				emmc_read_recovered++;
++				printf("A5XELTE eMMC: CMD17 lba=%u recovered after %u retries (total %u/%u)\n",
++				    lba, attempt, emmc_read_recovered, emmc_read_retries);
++			}
++			return error;
++		}
++		emmc_read_retries++;
++		delay(50 * (attempt + 1));
++	}
++	printf("A5XELTE eMMC: CMD17 lba=%u failed after retries, error %d\n", lba, error);
++	return error;
++}
++
+ static int
+ emmc_write_sector(uint32_t lba, const uint8_t *sector)
+ {
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index bebb7fb..672a9a0 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -50,6 +50,8 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ #include <IOKit/IOUserClient.h>
+ #include <IOKit/IOKitKeys.h>
+ #include <IOKit/IOLib.h>
++#include <IOKit/IODeviceTreeSupport.h>
++#include <IOKit/IOMemoryDescriptor.h>
+ #include <IOKit/IOLocks.h>
+ #include <IOKit/IOWorkLoop.h>
+ #include <IOKit/IOTimerEventSource.h>
+@@ -158,6 +160,14 @@ public:
+ 	IOMemoryMap  *fMap;
+ 	SweetSurface *fSurface;         /* the panel memory as an IOSurface */
+ 	IOLock       *fLock;            /* swaps and client list */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	/* j5y17lte: iOS draws into a virtual 1080x1920 panel (fPixels); each
++	 * presented frame is scaled by 2/3 into the real 720x1280 DECON buffer. */
++	IOMemoryMap  *fJ5PanelMap;
++	uintptr_t     fJ5Panel;
++	uint32_t      fJ5W, fJ5H, fJ5Stride;
++	void          j5ScaleToPanel();
++#endif
+ 	OSArray      *fClients;
+ 	uint32_t      fSwapID;
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+@@ -317,6 +327,44 @@ AppleCLCD::start(IOService *provider)
+ 	fWidth = 1080;
+ 	fHeight = 1920;
+ 	fRowBytes = 4320;
++	fJ5PanelMap = NULL;
++	fJ5Panel = 0;
++	fJ5W = fJ5H = fJ5Stride = 0;
++	{
++		/* ADT /j5-panel: reg = <real scanout base, size>, width, height,
++		 * stride, virtual-base = RAM outside XNU for the 1080x1920 canvas. */
++		IORegistryEntry *panel = IORegistryEntry::fromPath("/j5-panel", gIODTPlane);
++		if (panel != NULL) {
++			OSData *reg = OSDynamicCast(OSData, panel->getProperty("reg"));
++			OSData *w = OSDynamicCast(OSData, panel->getProperty("width"));
++			OSData *h = OSDynamicCast(OSData, panel->getProperty("height"));
++			OSData *st = OSDynamicCast(OSData, panel->getProperty("stride"));
++			OSData *vb = OSDynamicCast(OSData, panel->getProperty("virtual-base"));
++			if (reg && reg->getLength() >= 16 && w && h && st && vb && vb->getLength() >= 8) {
++				const uint64_t *r = (const uint64_t *)reg->getBytesNoCopy();
++				uint32_t pw = *(const uint32_t *)w->getBytesNoCopy();
++				uint32_t ph = *(const uint32_t *)h->getBytesNoCopy();
++				uint32_t ps = *(const uint32_t *)st->getBytesNoCopy();
++				uint64_t virt = *(const uint64_t *)vb->getBytesNoCopy();
++				IOMemoryDescriptor *md = (pw && ph && ps >= pw * 4 && (uint64_t)ps * ph <= r[1]) ?
++				    IOMemoryDescriptor::withPhysicalAddress(r[0], round_page((uint64_t)ps * ph), kIODirectionInOut) : NULL;
++				if (md != NULL) {
++					fJ5PanelMap = md->map(kIOMapWriteCombineCache);
++					md->release();
++				}
++				if (fJ5PanelMap != NULL) {
++					fJ5Panel = (uintptr_t)fJ5PanelMap->getVirtualAddress();
++					fJ5W = pw;
++					fJ5H = ph;
++					fJ5Stride = ps;
++					fPhys = virt;
++					IOLog("J5 FB: virtual %ux%u canvas at 0x%llx scaled to %ux%u panel at 0x%llx\n",
++					    fWidth, fHeight, fPhys, pw, ph, r[0]);
++				}
++			}
++			panel->release();
++		}
++	}
+ #else
+ 	fPhys = video.v_baseAddr;
+ 	fWidth = (uint32_t)video.v_width;
+@@ -343,6 +391,14 @@ AppleCLCD::start(IOService *provider)
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+ 	fPixels = fSurface != NULL ? fSurface->kernelAddress() : 0;
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	if (fPixels != 0 && fJ5Panel != 0) {
++		/* Start from black: the virtual canvas is ordinary RAM left by Linux. */
++		for (uint32_t y = 0; y < fHeight; y++) {
++			bzero((void *)(fPixels + (uint64_t)y * fRowBytes), (size_t)fWidth * 4);
++		}
++	}
++#endif
+ 	fWorkLoop = IOWorkLoop::workLoop();
+ 	if (fLock == NULL || fClients == NULL || fPixels == 0 || fWorkLoop == NULL) {
+ 		IOLog("SWEET FB: setup failed\n");
+@@ -852,10 +908,44 @@ AppleCLCD::present(const uint8_t *rec, bool *complete)
+ 		fPerfCPUFrames++;
+ 		fPerfCPUBytes += copied;
+ 	}
++#endif
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	if (copied && fJ5Panel) {
++		j5ScaleToPanel();
++	}
+ #endif
+ 	return copied;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/* Nearest-neighbour 1080x1920 -> 720x1280 (or any smaller panel). */
++void
++AppleCLCD::j5ScaleToPanel()
++{
++	static uint16_t xmap[2048];
++	static uint32_t mapped_w, mapped_src_w;
++	if (fJ5W > 2048 || fJ5W == 0 || fJ5H == 0) {
++		return;
++	}
++	if (mapped_w != fJ5W || mapped_src_w != fWidth) {
++		for (uint32_t x = 0; x < fJ5W; x++) {
++			xmap[x] = (uint16_t)((uint64_t)x * fWidth / fJ5W);
++		}
++		mapped_w = fJ5W;
++		mapped_src_w = fWidth;
++	}
++	for (uint32_t y = 0; y < fJ5H; y++) {
++		const uint32_t *src = (const uint32_t *)(fPixels +
++		    ((uint64_t)y * fHeight / fJ5H) * fRowBytes);
++		uint32_t *dst = (uint32_t *)(fJ5Panel + (uint64_t)y * fJ5Stride);
++		for (uint32_t x = 0; x < fJ5W; x++) {
++			dst[x] = src[xmap[x]];
++		}
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++#endif
++
+ bool
+ IOMobileFramebufferUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
+ {

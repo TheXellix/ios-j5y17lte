@@ -113,6 +113,16 @@ def build():
     root.children.append(mkadt.node('j5-reset', [
         ('reg', mkadt.u64(0x10480000, 0x1000)),
     ]))
+    # Real 720x1280 DECON scanout; iOS draws a 1080x1920 iPhone 8 Plus canvas
+    # in Linux-only RAM at virtual-base (outside XNU's 0x80000000 window),
+    # scaled 2/3 into the panel by the A5XELTE AppleCLCD (patch j5 0003).
+    root.children.append(mkadt.node('j5-panel', [
+        ('reg', mkadt.u64(0x67000000, 720 * 1280 * 4)),
+        ('width', mkadt.u32(720)),
+        ('height', mkadt.u32(1280)),
+        ('stride', mkadt.u32(2880)),
+        ('virtual-base', mkadt.u64(0x68000000)),
+    ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))
