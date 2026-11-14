@@ -1,0 +1,132 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index 21dc5fb..6c7479b 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -200,10 +200,18 @@ j5t_i2c_clear(void)
+ 	j5t_wr(j5t_i2c, IICCON, j5t_rd(j5t_i2c, IICCON) & ~0x10u);
+ }
+ 
++/*
++ * Sequences follow Linux drivers/i2c/busses/i2c-s3c2410.c (Samsung 3.18):
++ * message_start writes IICSTAT (mode, no START), the address to IICDS,
++ * IICCON back unchanged (a pending bit stays pending), then IICSTAT|START;
++ * every state step ends by clearing IICCON.IRQPEND, which releases the bus
++ * for the next phase (also the repeated START). STOP clears IICSTAT.BUSY,
++ * then IRQPEND.
++ */
+ static void
+-j5t_i2c_stop(uint32_t mode)
++j5t_i2c_stop(void)
+ {
+-	j5t_wr(j5t_i2c, IICSTAT, mode);         /* busy bit cleared: STOP */
++	j5t_wr(j5t_i2c, IICSTAT, j5t_rd(j5t_i2c, IICSTAT) & ~0x20u);
+ 	j5t_i2c_clear();
+ 	for (unsigned n = 0; n < 5000; n++) {
+ 		if (!(j5t_rd(j5t_i2c, IICSTAT) & 0x20u)) {
+@@ -213,50 +221,60 @@ j5t_i2c_stop(uint32_t mode)
+ 	}
+ }
+ 
+-/* Start + address; mode 0xd0 master TX, 0x90 master RX (output enabled). */
++/* mode 0xd0 master TX, 0x90 master RX (TXRXEN set). */
+ static bool
+-j5t_i2c_start(uint32_t mode, bool read, bool repeated)
++j5t_i2c_start(uint32_t mode, uint8_t addr)
+ {
+-	j5t_wr(j5t_i2c, IICCON, 0xe3u);         /* ACK, IRQ enable, PCLK/512/4 */
+-	j5t_wr(j5t_i2c, IICLC, 7u);
++	uint32_t con = j5t_rd(j5t_i2c, IICCON) | 0x80u;        /* ACKEN */
+ 	j5t_wr(j5t_i2c, IICSTAT, mode);
+-	j5t_wr(j5t_i2c, IICDS, (J5T_SLAVE << 1) | (read ? 1u : 0u));
++	j5t_wr(j5t_i2c, IICDS, addr);
+ 	delay(1);
+-	if (repeated) {
+-		j5t_i2c_clear();                /* releases the bus for the restart */
+-	}
++	j5t_wr(j5t_i2c, IICCON, con);
+ 	j5t_wr(j5t_i2c, IICSTAT, mode | 0x20u);
++	j5t_i2c_clear();
+ 	if (!j5t_i2c_wait()) {
+ 		return false;
+ 	}
+ 	return !(j5t_rd(j5t_i2c, IICSTAT) & 1u);    /* LRB = 1: NACK */
+ }
+ 
++static void
++j5t_i2c_setup(void)
++{
++	/* Idle bus: ACK, IRQ flag reporting, PCLK/512 prescaler 3 (polled). */
++	j5t_wr(j5t_i2c, IICCON, 0xe3u);
++	j5t_wr(j5t_i2c, IICLC, 7u);
++	j5t_wr(j5t_i2c, IICSTAT, 0x10u);       /* TXRXEN, slave idle */
++}
++
+ /* Write the 4-byte register address, repeated start, read 4 bytes. */
+ static bool
+ j5t_ist_read(uint32_t reg, uint32_t *value)
+ {
+ 	uint8_t a[4] = {(uint8_t)(reg >> 24), (uint8_t)(reg >> 16), (uint8_t)(reg >> 8), (uint8_t)reg};
+ 	uint8_t b[4];
+-	bool ok = false;
+ 
+ 	for (unsigned n = 0; n < 5000 && (j5t_rd(j5t_i2c, IICSTAT) & 0x20u); n++) {
+ 		delay(1);
+ 	}
+-	if (!j5t_i2c_start(0xd0u, false, false)) {
+-		goto tx_out;
++	if (j5t_rd(j5t_i2c, IICSTAT) & 0x20u) {
++		j5t_i2c_stop();
++		j5t_i2c_setup();
++	}
++	if (!j5t_i2c_start(0xd0u, J5T_SLAVE << 1)) {
++		goto fail;
+ 	}
+ 	for (unsigned i = 0; i < 4; i++) {
+ 		j5t_wr(j5t_i2c, IICDS, a[i]);
+ 		delay(1);
+ 		j5t_i2c_clear();
+ 		if (!j5t_i2c_wait() || (j5t_rd(j5t_i2c, IICSTAT) & 1u)) {
+-			goto tx_out;
++			goto fail;
+ 		}
+ 	}
+-	if (!j5t_i2c_start(0x90u, true, true)) {
+-		j5t_i2c_stop(0x90u);
+-		return false;
++	/* Repeated START in master RX, with the last write still pending. */
++	if (!j5t_i2c_start(0x90u, (J5T_SLAVE << 1) | 1u)) {
++		goto fail;
+ 	}
+ 	for (unsigned i = 0; i < 4; i++) {
+ 		if (i == 3) {
+@@ -264,17 +282,16 @@ j5t_ist_read(uint32_t reg, uint32_t *value)
+ 		}
+ 		j5t_i2c_clear();
+ 		if (!j5t_i2c_wait()) {
+-			j5t_i2c_stop(0x90u);
+-			return false;
++			goto fail;
+ 		}
+ 		b[i] = (uint8_t)j5t_rd(j5t_i2c, IICDS);
+ 	}
+-	j5t_i2c_stop(0x90u);
++	j5t_i2c_stop();
+ 	*value = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
+ 	return true;
+-tx_out:
+-	j5t_i2c_stop(0xd0u);
+-	return ok;
++fail:
++	j5t_i2c_stop();
++	return false;
+ }
+ 
+ /* ---- contacts ---- */
+@@ -479,6 +496,7 @@ j5_touch_probe(void)
+ 	j5t_wr(nfc_pins, 0, (j5t_rd(nfc_pins, 0) & ~0xffu) | 0x22u);
+ 	j5t_wr(nfc_pins, 8, j5t_rd(nfc_pins, 8) & ~0xfu);
+ 	delay(100);
++	j5t_i2c_setup();
+ 	printf("J5 TOUCH: I2C2 con=%#x stat=%#x lc=%#x\n",
+ 	    j5t_rd(j5t_i2c, IICCON), j5t_rd(j5t_i2c, IICSTAT), j5t_rd(j5t_i2c, IICLC));
+ 
