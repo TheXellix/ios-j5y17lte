@@ -33,7 +33,10 @@ k = data.find(b'J5XNULOG')
 if k < 0:
     print('XNU console ring J5XNULOG: NOT FOUND')
     sys.exit(0)
-text = data[k:].split(b'\0', 1)[0]
+head = data[k:k + 64].split(b'\0', 1)[0]
+print(head.decode('utf-8', 'replace').strip())
+# 64-byte NUL-padded header, then the console text up to the first NUL run.
+text = data[k + 64:].split(b'\0\0\0\0', 1)[0]
 print(f'--- XNU console ({len(text)} bytes) ---')
 sys.stdout.write(text.decode('utf-8', 'replace'))
 print('\n--- end ---')

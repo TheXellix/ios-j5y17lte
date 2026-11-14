@@ -41,3 +41,15 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   Flashed with Heimdall. User reports XNU verbose console text scrolling
   slowly on the panel: the S-Boot DECON scanout of 0x67000000 shows XNU's
   framebuffer console without any panel re-initialisation.
+- 2026-11-14 boot 1 log (TWRP last_kmsg, 673 KB, a few DRAM bit flips after
+  the key reset): XNU 22.6.0 boots on 1 CPU, GICv2 mapped from the ADT,
+  A5XELTE eMMC finds GPT USERDATA (first LBA 5558272), hfs mounts
+  J5IOSROOT, launchd runs all boot tasks, "Early boot complete. Continuing
+  system boot", backboardd and SpringBoard exec, backboardd opens the
+  AppleCLCD and creates surfaces. 14 eMMC CMD17 errors (RINTSTS 0x424/0x42c:
+  HTO data starvation) cause page-in failures -> SIGBUS (code 0xa) in
+  SpringBoard x2, callservicesd x2, xpcproxy, chronod, ... AppleCLCD still
+  used the A5's fixed 1080x1920 geometry; perf lines every 5 s flood the
+  console (use a5fb_perf=0).
+- patch j5 0003: CMD17 retry (up to 8, FIFO reset each attempt) and a
+  1080x1920 iPhone 8 Plus canvas at 0x68000000 scaled 2/3 into the panel.
