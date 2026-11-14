@@ -104,6 +104,11 @@ def build():
         ('height', mkadt.u32(1280)),
         ('stride', mkadt.u32(2880)),
     ]))
+    # Samsung exynos-snapshot log_kernel ring (TWRP /proc/last_kmsg). The
+    # last 4 KiB page stays with the loader markers and SEC_LKMSG_MAGICKEY.
+    root.children.append(mkadt.node('j5-ramlog', [
+        ('reg', mkadt.u64(0x46800000, 0x200000 - 0x1000)),
+    ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))

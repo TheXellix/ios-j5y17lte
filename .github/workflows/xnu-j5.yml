@@ -114,12 +114,14 @@ jobs:
       - name: Check kernel for ARMv8.1 LSE atomics
         if: always()
         run: |
-          k=$(ls dxb/build/xnu.obj/kernel.development.a5xelte* 2>/dev/null | grep -v dSYM | head -1 || true)
-          [ -n "$k" ] || { echo "no kernel produced"; exit 0; }
-          xcrun llvm-objdump -d --no-show-raw-insn "$k" > out/kernel.disasm
-          if grep -E $'\t(cas|casa|casal|casl|ldadd|ldclr|ldeor|ldset|swp)[a-z]*\t' out/kernel.disasm | head -20; then
-            echo "::warning::LSE instructions present (Cortex-A53 has none)"
-          fi
+          k=dxb/build/xnu.obj/kernel.development.a5xelte
+          [ -f "$k" ] || { echo "no kernel produced"; exit 0; }
+          n=0
+          for sec in $(xcrun llvm-objdump --macho --private-headers "$k" | awk '/sectname/{s=$2} /segname/{g=$2; if (s != "") print g","s; s=""}' | sort -u | grep -E 'EXEC|__text'); do
+            c=$(xcrun llvm-objdump --macho -d --no-show-raw-insn --section="$sec" "$k" | grep -cE $'\t(cas|casa|casal|casl|casp|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp|stadd|stclr|stset)[a-z]*\t' || true)
+            echo "$sec LSE=$c"; n=$((n + c))
+          done
+          if [ "$n" -gt 0 ]; then echo "::error::$n LSE instructions in kernel text (Cortex-A53 has none)"; exit 1; fi
 
       - name: Collect
         if: always()

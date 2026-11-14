@@ -1,0 +1,171 @@
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 7da26d2..1545d74 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -1104,7 +1104,7 @@ La5_draw_text:
+ 	adrp	x3, EXT(iso_font)@page
+ 	add	x3, x3, EXT(iso_font)@pageoff
+ 	MOV64	x4, 0x67000000
+-	mov	x5, #4320
++	mov	x5, #2880		/* j5y17lte: 720 px rows */
+ 	madd	x4, x2, x5, x4
+ 	add	x4, x4, x1, lsl #2
+ La5_text_next_char:
+@@ -1120,7 +1120,7 @@ La5_text_column:
+ 	lsl	w11, w11, w10
+ 	tst	w9, w11
+ 	b.eq	La5_text_skip_pixel
+-	mov	x13, #8640
++	mov	x13, #5760
+ 	madd	x12, x8, x13, x4
+ 	add	x12, x12, x10, lsl #3
+ 	mov	w14, #-1
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
+index dcdbcf6..afe5d7c 100644
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -13,11 +13,11 @@
+ 
+ /* The bootstrap TTBR0 maps DECON scanout VA=PA until arm_vm_init. */
+ #define A5_FB ((volatile uint32_t *)(uintptr_t)0x67000000)
+-#define A5_STRIDE 1080u
++#define A5_STRIDE 720u  /* j5y17lte: 720x1280, 2880-byte rows */
+ #define A5_SCALE 2u
+ #define A5_ROW_HEIGHT (16u * A5_SCALE)
+ #define A5_COL_WIDTH (8u * A5_SCALE)
+-#define A5_COLS (1080u / A5_COL_WIDTH)
++#define A5_COLS (720u / A5_COL_WIDTH)
+ extern unsigned char iso_font[256 * 16];
+ static unsigned int a5_row = 4, a5_col, a5_active = 1, a5_panicking;
+ 
+@@ -44,7 +44,7 @@ sweet_early_putc(char c)
+ 	}
+ 	if (c == '\n' || a5_col >= A5_COLS) {
+ 		a5_col = 0;
+-		a5_row = (a5_row + 1) % (1920u / A5_ROW_HEIGHT);
++		a5_row = (a5_row + 1) % (1280u / A5_ROW_HEIGHT);
+ 		a5_clear_row();
+ 		if (c == '\n') {
+ 			return;
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index ed7dccd..5782170 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -810,6 +810,93 @@ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) sweet_fbcon_serial_fu
+ 	.device = SERIAL_SWEET_FBCON
+ };
+ 
++#if defined(A5XELTE)
++/*
++ * j5y17lte: mirror the console into the Samsung exynos-snapshot log_kernel
++ * ring (ADT /j5-ramlog, normally 0x46800000). The J5 loader stores
++ * SEC_LKMSG_MAGICKEY in the ring's last 8 bytes, so after any reset TWRP's
++ * /proc/last_kmsg returns the whole ring including this text. Uncached
++ * device mapping: nothing to flush before a watchdog or panic reset.
++ * Disable with j5ramlog=0.
++ */
++static volatile uint8_t *j5rl_base;
++static uint32_t j5rl_size, j5rl_pos;
++
++static void
++j5rl_init(void)
++{
++}
++
++static unsigned int
++j5rl_transmit_ready(void)
++{
++	return 1;
++}
++
++static void
++j5rl_transmit_data(uint8_t c)
++{
++	if (j5rl_base == NULL) {
++		return;
++	}
++	j5rl_base[j5rl_pos] = c;
++	if (++j5rl_pos >= j5rl_size) {
++		j5rl_pos = 64;  /* keep the header line */
++	}
++}
++
++static unsigned int
++j5rl_receive_ready(void)
++{
++	return 0;
++}
++
++static uint8_t
++j5rl_receive_data(void)
++{
++	return 0;
++}
++
++SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) j5_ramlog_serial_functions =
++{
++	.init = j5rl_init,
++	.transmit_ready = j5rl_transmit_ready,
++	.transmit_data = j5rl_transmit_data,
++	.receive_ready = j5rl_receive_ready,
++	.receive_data = j5rl_receive_data,
++	.device = SERIAL_J5_RAMLOG
++};
++
++static void
++j5_ramlog_probe(void)
++{
++	DTEntry entry;
++	uint64_t const *reg;
++	unsigned int size;
++	int enabled = 1;
++
++	(void)PE_parse_boot_argn("j5ramlog", &enabled, sizeof(enabled));
++	if (!enabled ||
++	    SecureDTFindEntry("name", "j5-ramlog", &entry) != kSuccess ||
++	    SecureDTGetProperty(entry, "reg", (void const **)&reg, &size) != kSuccess ||
++	    size < 16 || reg[1] < 4096 || reg[1] > (8u << 20)) {
++		return;
++	}
++	j5rl_base = (volatile uint8_t *)ml_io_map(reg[0], reg[1]);
++	if (j5rl_base == NULL) {
++		return;
++	}
++	j5rl_size = (uint32_t)reg[1];
++	static const char header[64] = "\nJ5XNULOG ring start (XNU console, j5y17lte)\n";
++	for (uint32_t i = 0; i < sizeof(header); i++) {
++		j5rl_base[i] = (uint8_t)header[i];
++	}
++	j5rl_pos = sizeof(header);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	register_serial_functions(&j5_ramlog_serial_functions);
++}
++#endif /* A5XELTE */
++
+ static void
+ fbcon_probe(void)
+ {
+@@ -927,6 +1014,9 @@ serial_init(void)
+ 	PE_parse_boot_argn("disable-uart-irq", &disable_uart_irq, sizeof(disable_uart_irq));
+ 
+ 	fbcon_probe();
++#if defined(A5XELTE)
++	j5_ramlog_probe();
++#endif
+ 
+ #ifdef PI3_UART
+ 	if (SecureDTFindEntry("name", "gpio", &entryP) == kSuccess) {
+diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
+index 9004f2b..b8fe9d5 100644
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -51,7 +51,8 @@ typedef enum serial_device {
+ 	SERIAL_PI3_UART=0x4,
+ 	SERIAL_VMAPPLE_UART=0x8,
+ 	SERIAL_DCC_UART=0x10,
+-	SERIAL_SWEET_FBCON=0x20
++	SERIAL_SWEET_FBCON=0x20,
++	SERIAL_J5_RAMLOG=0x40
+ } serial_device_t;
+ 
+ kern_return_t serial_irq_enable(serial_device_t device);
