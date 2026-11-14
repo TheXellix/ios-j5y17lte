@@ -1,0 +1,52 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index 962d211..f621271 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -528,6 +528,14 @@ j5_touch_probe(void)
+ 		return true;
+ 	}
+ 
++	/* Attention line GPA0-6 (ALIVE bank 0x40): Linux "attn-input" state is
++	 * function 0 (input), no pull. S-Boot may leave it driven; set it
++	 * before the IC is powered so the firmware sees a released INT line. */
++	printf("J5 TOUCH: GPA0 con=%#x dat=%#x pud=%#x (before)\n",
++	    j5t_rd(j5t_alive, 0x40), j5t_rd(j5t_alive, 0x44), j5t_rd(j5t_alive, 0x48));
++	j5t_wr(j5t_alive, 0x40, j5t_rd(j5t_alive, 0x40) & ~(0xfu << 24));
++	j5t_wr(j5t_alive, 0x48, j5t_rd(j5t_alive, 0x48) & ~(0x3u << 12));
++
+ 	/* PMIC bus: MIF HSI2C gates and GPM0-0/1 function 2. */
+ 	printf("J5 TOUCH: MIF HSI2C gate %#x GPM0 con=%#x pud=%#x\n",
+ 	    j5t_rd(mif_cmu, 0x840), j5t_rd(mif_pins, 0), j5t_rd(mif_pins, 8));
+@@ -539,7 +547,9 @@ j5_touch_probe(void)
+ 	if (!j5t_pmic_read(0x00, &id) || !j5t_pmic_read(J5T_LDO34, &ldo)) {
+ 		printf("J5 TOUCH: S2MPU05 read failed; trying the touch IC anyway\n");
+ 	} else {
+-		printf("J5 TOUCH: S2MPU05 ID=%#x LDO34=%#x\n", id, ldo);
++		uint8_t ldo35 = 0xff;
++		(void)j5t_pmic_read(J5T_LDO34 + 1, &ldo35);
++		printf("J5 TOUCH: S2MPU05 ID=%#x LDO34=%#x LDO35(vtouch_2.8v, touchkeys)=%#x\n", id, ldo, ldo35);
+ 		if ((ldo & 0x3fu) != 0x3cu) {
+ 			printf("J5 TOUCH: LDO34 voltage selector is not 3.3 V, left unchanged\n");
+ 		} else if ((ldo & 0xc0u) != 0xc0u) {
+@@ -582,9 +592,19 @@ j5_touch_probe(void)
+ 	}
+ 	printf("J5 TOUCH: IST3038H status=%#x msg=%#x max=%ux%u flags=%#x\n",
+ 	    status, msg, j5t_max_x, j5t_max_y, j5t_flags);
++	{
++		uint32_t chip = 0;
++		bool c = j5t_ist_read(0x40001000u | 0x80000000u, &chip);   /* DA CHIPID */
++		printf("J5 TOUCH: chip id read=%d value=%#x GPA0 con=%#x dat=%#x\n",
++		    c, chip, j5t_rd(j5t_alive, 0x40), j5t_rd(j5t_alive, 0x44));
++	}
+ 	(void)j5t_ist_start_scan();
+-	if (j5t_ist_read(IST_HIB_TOUCH_STATUS, &status) && j5t_ist_read(IST_HIB_INTR_MSG, &msg)) {
+-		printf("J5 TOUCH: after start status=%#x msg=%#x\n", status, msg);
++	for (unsigned i = 0; i < 5; i++) {
++		if (j5t_ist_read(IST_HIB_TOUCH_STATUS, &status) && j5t_ist_read(IST_HIB_INTR_MSG, &msg)) {
++			printf("J5 TOUCH: after start [%u] status=%#x msg=%#x int=%u\n", i, status, msg,
++			    (j5t_rd(j5t_alive, 0x44) >> 6) & 1u);
++		}
++		delay(200000);
+ 	}
+ 	if (kernel_thread_start(j5t_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);

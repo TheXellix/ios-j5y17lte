@@ -79,3 +79,5 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   INTR_MSG 0x08000800. Linux resume sends MODE_SPECIAL with
   NOISE_MODE_POWER (bit 8); patch j5 0009 does the same and power-cycles
   LDO34 (ist30xx_reset timing) if the firmware stays idle.
+- boot 8 (patch j5 0009): still idle after the POWER mode bit and an LDO34
+  power cycle. Patch j5 0010 sets GPA0-6 (touch INT) to input before power-on.
