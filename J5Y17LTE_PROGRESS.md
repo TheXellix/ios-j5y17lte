@@ -30,3 +30,14 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   (S-Boot copies the kernel there, unlike the A5's 0x40205000), MPIDR
   0x80000000, MMFR0 0x1122 (4K yes, 16K no), CNTFRQ 0, result 4: 4 KiB MMU
   on, TCR 0x80a03520, SCTLR 0x30c5183d.
+- 2026-11-14 first XNU boot attempt with the payload in the ramdisk slot
+  (25 MB): S-Boot loops with "could not do normal boot, invalid ramdisk
+  length". TWRP's 13.5 MB ramdisk is accepted. Recovered via download mode
+  and Heimdall.
+- 2026-11-14 payload appended to the loader in the kernel slot (16.7 MB,
+  J5EMBED header at +64 KiB), stock 1.1 MB ramdisk, CI kernel run 43588711096
+  (patches-j5 0001 + 0002), root rd=emmcroot0 emmcroot=USERDATA on the iOS
+  16.7.16 iPhone 8 Plus HFSX root (USERDATA verified in 64 MiB chunks).
+  Flashed with Heimdall. User reports XNU verbose console text scrolling
+  slowly on the panel: the S-Boot DECON scanout of 0x67000000 shows XNU's
+  framebuffer console without any panel re-initialisation.
