@@ -1,0 +1,46 @@
+diff --git a/osfmk/console/serial_console.c b/osfmk/console/serial_console.c
+index 2ab4334..5683846 100644
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -279,6 +279,9 @@ extern void a5xelte_log_append(const char *c, int size); /* bsd/dev/a5xelte_emmc
+  * the GUI. A panic draws again.
+  */
+ int sweet_console_muted;
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++extern void j5_ramlog_append(const char *c, int size);
++#endif
+ #endif
+ 
+ static inline void
+@@ -294,6 +297,10 @@ _cnputs(char *c, int size, bool poll)
+ #endif
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 	if (sweet_console_muted && !panic_active()) {
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++		/* j5y17lte: keep the last_kmsg RAM log complete while the GUI owns the panel. */
++		j5_ramlog_append(c, size);
++#endif
+ 		return;
+ 	}
+ #endif
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index ccd12f5..f27a9ba 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -857,6 +857,16 @@ j5rl_receive_data(void)
+ 	return 0;
+ }
+ 
++/* Console text while the framebuffer console is muted (serial_console.c). */
++void j5_ramlog_append(const char *c, int size);
++void
++j5_ramlog_append(const char *c, int size)
++{
++	for (int i = 0; i < size; i++) {
++		j5rl_transmit_data((uint8_t)c[i]);
++	}
++}
++
+ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) j5_ramlog_serial_functions =
+ {
+ 	.init = j5rl_init,
