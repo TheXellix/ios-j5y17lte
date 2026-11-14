@@ -128,6 +128,8 @@ df -h "$root"
 sudo umount "$root"
 mounts=("${mounts[@]:1}")
 fsck.hfsplus -f -y "$out" | grep -v 'Illegal name' || true
-fsck.hfsplus -f -n "$out"
+# Linux fsck_hfs writes 32 KiB cache blocks and can extend the file past the
+# volume end: restore the exact partition length (the tail is not volume data).
+truncate -s "$USERDATA_BYTES" "$out"
 ls -l "$out"
 echo "J5 iOS root ready: $out (not written to the phone)"
