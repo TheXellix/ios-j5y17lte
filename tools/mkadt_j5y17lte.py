@@ -91,8 +91,9 @@ def build():
     arm_io.children.append(mkadt.node('disp0', [
         ('device_type', mkadt.cstr('display-subsystem')),
         ('compatible', mkadt.cstr('samsung,a5xelte-display')),
-        ('canvas-width', mkadt.u32(720)),
-        ('canvas-height', mkadt.u32(1280)),
+        # iOS sees the iPhone 8 Plus 1080x1920 canvas (j5-panel scales it).
+        ('canvas-width', mkadt.u32(1080)),
+        ('canvas-height', mkadt.u32(1920)),
     ]))
     # No GPU nub: the A5 Mali-T720 stage is not ported to the J5 Mali-T830.
     root.children = [n for n in root.children if n.prop('name') not in
