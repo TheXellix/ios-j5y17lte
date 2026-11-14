@@ -81,3 +81,8 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   LDO34 (ist30xx_reset timing) if the firmware stays idle.
 - boot 8 (patch j5 0009): still idle after the POWER mode bit and an LDO34
   power cycle. Patch j5 0010 sets GPA0-6 (touch INT) to input before power-on.
+- boot 9 (patch j5 0010; GPA0-6 was already input, con=0): chip id 0x38d;
+  ~600 ms after MODE_SPECIAL(POWER) + FW_START the HIB_TOUCH_STATUS frame
+  counter runs (0x02200075, 0x04600075), as under Linux. 0x8ead8ead only
+  means no message since boot; the 0009 idle reset was wrong. Patch j5 0011
+  resets only when the status frame counter stops.
