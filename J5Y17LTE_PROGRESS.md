@@ -62,3 +62,9 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   canvas changed to 1080x1920 (backboardd also created 720x1280 surfaces).
 - boot 4: kernel run 5 (patch j5 0004: RAM log continues while the panel
   console is muted), cpus=4, a5fb_noconsole=1, a5fb_keep_on=1.
+- 2026-11-14 boot 5 (kernel run 6, patches j5 0005 + 0006): iOS home screen
+  reached (status bar, dock, two "Waiting..." placeholder icons). All four
+  GPIO keys work (Home unlocks). Touch: S2MPU05 ID 0x2, LDO34 0x3c -> 0xfc
+  (tsp_avdd was off after S-Boot); IST3038H acks 0x50 but reads fail
+  (IICSTAT stuck 0xb0 / NACK 0x11) -> patch j5 0007 follows the Linux
+  s3c2410 START / repeated START / STOP sequences.
