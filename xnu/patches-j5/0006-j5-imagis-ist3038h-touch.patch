@@ -1,0 +1,549 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 851addd..6153f5e 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,7 @@ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
++bsd/dev/j5_touch.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index b9f3bc9..433cd15 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -669,6 +669,8 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
+ 	}
+ }
+ 
++bool j5_touch_probe(void);
++
+ void
+ a5xelte_touch_probe(void)
+ {
+@@ -683,6 +685,10 @@ a5xelte_touch_probe(void)
+ 	vm_offset_t mif;
+ 	uint32_t pclk;
+ 	uint32_t mifclk;
++	/* j5y17lte: Imagis IST3038H path when the ADT has /j5-touch. */
++	if (j5_touch_probe()) {
++		return;
++	}
+ 	(void)PE_parse_boot_argn("a5touch", &enabled, sizeof(enabled));
+ 	(void)PE_parse_boot_argn("a5touchprobe", &probe_enabled, sizeof(probe_enabled));
+ 	(void)PE_parse_boot_argn("a5touchlog", &log_contacts, sizeof(log_contacts));
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+new file mode 100644
+index 0000000..21dc5fb
+--- /dev/null
++++ b/bsd/dev/j5_touch.c
+@@ -0,0 +1,507 @@
++/*
++ * j5y17lte (SM-J530F, Exynos7870): Imagis IST3038H touchscreen.
++ *
++ * Hardware from the phone's rev07 DTB and the Samsung 3.18 kernel:
++ *   touch IC   I2C2 (s3c2440-i2c) at ADT /j5-touch "i2c", slave 0x50,
++ *              pins GPC2-0/1 function 2 (pinctrl "nfc"), PCLK gate
++ *              CMU_PERI CLK_ENABLE_CLK_PERI_BUS0 bit 19
++ *   power      S2MPU05 LDO34 (tsp_avdd, 3.3 V, CTRL register 0x50) on the
++ *              MIF HSI2C (exynos7 hsi2c, slave 0x66), pins GPM0-0/1
++ *              function 2, gates CMU_MIF CLK_ENABLE_CLK_MIF_HSI2C bits 2/3
++ *   attention  GPA0-6, active low (read only, polled)
++ *   protocol   drivers/input/touchscreen/imagis_30xxc: 4-byte big-endian
++ *              register address, repeated start, 4-byte big-endian value.
++ *              HIB_INTR_MSG: (msg & 0xc00) == 0xc00 valid, finger count
++ *              [15:12], finger status [9:0]; HIB_COORD + 4 * i: y [11:0],
++ *              x [23:12], area [27:24], id [31:28] (1-based).
++ *
++ * Every step is logged to the console (and the J5 RAM log). Disable with
++ * j5touch=0; j5touchlog=1 logs every contact.
++ */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void delay(int usec);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++bool j5_touch_probe(void);
++
++#define J5T_SLAVE       0x50u
++#define J5T_PMIC_SLAVE  0x66u
++#define J5T_LDO34       0x50u
++
++#define IST_HIB_TOUCH_STATUS 0xb00b0100u
++#define IST_HIB_INTR_MSG     0xb00b0104u
++#define IST_HIB_COORD        0xb00b0108u
++#define IST_MAX_FINGERS      10
++
++static vm_offset_t j5t_i2c, j5t_hsi, j5t_alive;
++static uint32_t j5t_max_x = 720, j5t_max_y = 1280, j5t_flags;
++static bool j5t_log;
++static int j5t_sleep;
++static bool j5t_down[IST_MAX_FINGERS];
++static int j5t_x[IST_MAX_FINGERS], j5t_y[IST_MAX_FINGERS];
++
++static uint32_t
++j5t_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++j5t_wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* ---- MIF HSI2C (exynos7 controller, polled), from the A5XELTE PMIC path ---- */
++
++static void
++j5t_hsi_init(void)
++{
++	j5t_wr(j5t_hsi, 0x00, 0x80000009u);     /* CTL: soft reset */
++	j5t_wr(j5t_hsi, 0x00, 0x00000009u);
++	j5t_wr(j5t_hsi, 0x48, 0);               /* no hardware timeout */
++	j5t_wr(j5t_hsi, 0x60, 0x78787800u);     /* conservative fast-mode timing */
++	j5t_wr(j5t_hsi, 0x64, 0x3c007878u);
++	j5t_wr(j5t_hsi, 0x68, 0x000000f0u);
++	j5t_wr(j5t_hsi, 0x6c, 0x3cu);
++	j5t_wr(j5t_hsi, 0x08, 0xfu);
++	j5t_wr(j5t_hsi, 0x40, 0x80000000u);
++	j5t_wr(j5t_hsi, 0x20, 0);
++}
++
++static bool
++j5t_hsi_message(bool receive, uint8_t *bytes, unsigned count, bool stop)
++{
++	uint32_t last_irq = 0;
++	bool transfer_done = false;
++	unsigned done = 0;
++	if (!count || count > 4) {
++		return false;
++	}
++	j5t_wr(j5t_hsi, 0x24, j5t_rd(j5t_hsi, 0x24));
++	j5t_wr(j5t_hsi, 0x04, 3u | (count << (receive ? 4 : 16)));
++	j5t_wr(j5t_hsi, 0x70, J5T_PMIC_SLAVE << 10);
++	j5t_wr(j5t_hsi, 0x00, 9u | (receive ? 0x40u : 0x80u));
++	j5t_wr(j5t_hsi, 0x20, 0xf80u | (receive ? 0x42u : 1u));
++	j5t_wr(j5t_hsi, 0x44, count | (receive ? 0x10000u : 0) | (stop ? 0x20000u : 0) | 0x80000000u);
++	for (unsigned us = 0; us < 100000; us++) {
++		uint32_t irq = j5t_rd(j5t_hsi, 0x24);
++		if (irq) {
++			last_irq |= irq;
++			j5t_wr(j5t_hsi, 0x24, irq);
++		}
++		if (irq & 0xf00u) {
++			printf("J5 TOUCH: PMIC HSI2C error rx=%d done=%u/%u irq=%#x state=%#x\n",
++			    receive, done, count, last_irq, j5t_rd(j5t_hsi, 0x50));
++			goto fail;
++		}
++		if (irq & 0x80u) {
++			transfer_done = true;
++		}
++		if (receive) {
++			while (done < count && ((j5t_rd(j5t_hsi, 0x30) >> 16) & 0x7fu)) {
++				bytes[done++] = (uint8_t)j5t_rd(j5t_hsi, 0x38);
++			}
++		} else {
++			while (done < count && !(j5t_rd(j5t_hsi, 0x30) & (1u << 7))) {
++				j5t_wr(j5t_hsi, 0x34, bytes[done++]);
++			}
++			if (done == count) {
++				j5t_wr(j5t_hsi, 0x20, 0xf80u);
++			}
++		}
++		if (done == count && transfer_done) {
++			j5t_wr(j5t_hsi, 0x20, 0);
++			if (stop) {
++				for (unsigned n = 0; n < 100000; n++) {
++					if (!(j5t_rd(j5t_hsi, 0x50) & (1u << 17))) {
++						return true;
++					}
++					delay(1);
++				}
++				printf("J5 TOUCH: PMIC STOP busy state=%#x\n", j5t_rd(j5t_hsi, 0x50));
++				goto fail;
++			}
++			return true;
++		}
++		delay(1);
++	}
++	printf("J5 TOUCH: PMIC HSI2C timeout rx=%d done=%u/%u irq=%#x state=%#x fifo=%#x\n",
++	    receive, done, count, last_irq | j5t_rd(j5t_hsi, 0x24),
++	    j5t_rd(j5t_hsi, 0x50), j5t_rd(j5t_hsi, 0x30));
++fail:
++	j5t_wr(j5t_hsi, 0x20, 0);
++	j5t_hsi_init();
++	return false;
++}
++
++static bool
++j5t_pmic_read(uint8_t reg, uint8_t *value)
++{
++	for (unsigned attempt = 0; attempt < 3; attempt++) {
++		uint8_t address = reg;
++		if (j5t_hsi_message(false, &address, 1, false) &&
++		    j5t_hsi_message(true, value, 1, true)) {
++			return true;
++		}
++		delay(1000);
++	}
++	return false;
++}
++
++static bool
++j5t_pmic_write(uint8_t reg, uint8_t value)
++{
++	for (unsigned attempt = 0; attempt < 3; attempt++) {
++		uint8_t data[2] = {reg, value};
++		if (j5t_hsi_message(false, data, 2, true)) {
++			return true;
++		}
++		delay(1000);
++	}
++	return false;
++}
++
++/* ---- I2C2 (s3c2440 controller, polled) ---- */
++
++#define IICCON  0x00u
++#define IICSTAT 0x04u
++#define IICDS   0x0cu
++#define IICLC   0x10u
++
++static bool
++j5t_i2c_wait(void)
++{
++	for (unsigned n = 0; n < 20000; n++) {
++		if (j5t_rd(j5t_i2c, IICCON) & 0x10u) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
++}
++
++static void
++j5t_i2c_clear(void)
++{
++	j5t_wr(j5t_i2c, IICCON, j5t_rd(j5t_i2c, IICCON) & ~0x10u);
++}
++
++static void
++j5t_i2c_stop(uint32_t mode)
++{
++	j5t_wr(j5t_i2c, IICSTAT, mode);         /* busy bit cleared: STOP */
++	j5t_i2c_clear();
++	for (unsigned n = 0; n < 5000; n++) {
++		if (!(j5t_rd(j5t_i2c, IICSTAT) & 0x20u)) {
++			return;
++		}
++		delay(1);
++	}
++}
++
++/* Start + address; mode 0xd0 master TX, 0x90 master RX (output enabled). */
++static bool
++j5t_i2c_start(uint32_t mode, bool read, bool repeated)
++{
++	j5t_wr(j5t_i2c, IICCON, 0xe3u);         /* ACK, IRQ enable, PCLK/512/4 */
++	j5t_wr(j5t_i2c, IICLC, 7u);
++	j5t_wr(j5t_i2c, IICSTAT, mode);
++	j5t_wr(j5t_i2c, IICDS, (J5T_SLAVE << 1) | (read ? 1u : 0u));
++	delay(1);
++	if (repeated) {
++		j5t_i2c_clear();                /* releases the bus for the restart */
++	}
++	j5t_wr(j5t_i2c, IICSTAT, mode | 0x20u);
++	if (!j5t_i2c_wait()) {
++		return false;
++	}
++	return !(j5t_rd(j5t_i2c, IICSTAT) & 1u);    /* LRB = 1: NACK */
++}
++
++/* Write the 4-byte register address, repeated start, read 4 bytes. */
++static bool
++j5t_ist_read(uint32_t reg, uint32_t *value)
++{
++	uint8_t a[4] = {(uint8_t)(reg >> 24), (uint8_t)(reg >> 16), (uint8_t)(reg >> 8), (uint8_t)reg};
++	uint8_t b[4];
++	bool ok = false;
++
++	for (unsigned n = 0; n < 5000 && (j5t_rd(j5t_i2c, IICSTAT) & 0x20u); n++) {
++		delay(1);
++	}
++	if (!j5t_i2c_start(0xd0u, false, false)) {
++		goto tx_out;
++	}
++	for (unsigned i = 0; i < 4; i++) {
++		j5t_wr(j5t_i2c, IICDS, a[i]);
++		delay(1);
++		j5t_i2c_clear();
++		if (!j5t_i2c_wait() || (j5t_rd(j5t_i2c, IICSTAT) & 1u)) {
++			goto tx_out;
++		}
++	}
++	if (!j5t_i2c_start(0x90u, true, true)) {
++		j5t_i2c_stop(0x90u);
++		return false;
++	}
++	for (unsigned i = 0; i < 4; i++) {
++		if (i == 3) {
++			j5t_wr(j5t_i2c, IICCON, j5t_rd(j5t_i2c, IICCON) & ~0x80u);   /* NACK last */
++		}
++		j5t_i2c_clear();
++		if (!j5t_i2c_wait()) {
++			j5t_i2c_stop(0x90u);
++			return false;
++		}
++		b[i] = (uint8_t)j5t_rd(j5t_i2c, IICDS);
++	}
++	j5t_i2c_stop(0x90u);
++	*value = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
++	return true;
++tx_out:
++	j5t_i2c_stop(0xd0u);
++	return ok;
++}
++
++/* ---- contacts ---- */
++
++static void
++j5t_report(uint32_t msg)
++{
++	uint32_t coord[IST_MAX_FINGERS];
++	bool now[IST_MAX_FINGERS] = { false };
++	unsigned count = (msg >> 12) & 0xfu;
++	if (count > IST_MAX_FINGERS) {
++		return;
++	}
++	for (unsigned i = 0; i < count; i++) {
++		if (!j5t_ist_read(IST_HIB_COORD + 4 * i, &coord[i])) {
++			return;
++		}
++	}
++	for (unsigned i = 0; i < count; i++) {
++		unsigned id = (coord[i] >> 28) & 0xfu;
++		int rx = (int)((coord[i] >> 12) & 0xfffu), ry = (int)(coord[i] & 0xfffu);
++		if (id == 0 || id > IST_MAX_FINGERS || !(msg & (1u << (id - 1)))) {
++			continue;
++		}
++		if (j5t_flags & 1u) {           /* swap */
++			int t = rx; rx = ry; ry = t;
++		}
++		if (j5t_flags & 2u) {
++			rx = (int)j5t_max_x - 1 - rx;
++		}
++		if (j5t_flags & 4u) {
++			ry = (int)j5t_max_y - 1 - ry;
++		}
++		/* Touch panel pixels -> the 1080x1920 iOS canvas. */
++		int x = (int)((int64_t)rx * 1080 / (int64_t)j5t_max_x);
++		int y = (int)((int64_t)ry * 1920 / (int64_t)j5t_max_y);
++		unsigned slot = id - 1;
++		now[slot] = true;
++		if (j5t_log && (!j5t_down[slot] || x != j5t_x[slot] || y != j5t_y[slot])) {
++			printf("J5 TOUCH: id=%u raw=%d,%d -> %d,%d\n", id, rx, ry, x, y);
++		}
++		j5t_down[slot] = true;
++		j5t_x[slot] = x;
++		j5t_y[slot] = y;
++		sweet_hid_touch((int)slot, 1, x, y);
++	}
++	for (unsigned slot = 0; slot < IST_MAX_FINGERS; slot++) {
++		if (j5t_down[slot] && !now[slot]) {
++			j5t_down[slot] = false;
++			if (j5t_log) {
++				printf("J5 TOUCH: id=%u up\n", slot + 1);
++			}
++			sweet_hid_touch((int)slot, 0, j5t_x[slot], j5t_y[slot]);
++		}
++	}
++}
++
++static void
++j5t_release_all(void)
++{
++	for (unsigned slot = 0; slot < IST_MAX_FINGERS; slot++) {
++		if (j5t_down[slot]) {
++			j5t_down[slot] = false;
++			sweet_hid_touch((int)slot, 0, j5t_x[slot], j5t_y[slot]);
++		}
++	}
++}
++
++static void
++j5t_wait_ms(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&j5t_sleep, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++j5t_thread(void *arg, wait_result_t result)
++{
++	unsigned tick = 0, errors = 0, events = 0;
++	(void)arg;
++	(void)result;
++	for (;;) {
++		bool attention = j5t_alive && !(j5t_rd(j5t_alive, 0x44) & (1u << 6));
++		if (attention || j5t_down[0] || (tick++ % 8) == 0) {
++			uint32_t msg = 0;
++			if (!j5t_ist_read(IST_HIB_INTR_MSG, &msg)) {
++				if (++errors <= 8 || (errors % 256) == 0) {
++					printf("J5 TOUCH: read error %u stat=%#x\n", errors, j5t_rd(j5t_i2c, IICSTAT));
++				}
++				j5t_release_all();
++			} else if ((msg & 0xc00u) == 0xc00u) {
++				if (++events <= 4) {
++					printf("J5 TOUCH: event msg=%#x\n", msg);
++				}
++				j5t_report(msg);
++			} else if (msg == 0 || (msg & 0xc00u) != 0xc00u) {
++				/* No valid contact message: nothing is down. */
++				bool any = false;
++				for (unsigned s = 0; s < IST_MAX_FINGERS; s++) {
++					any |= j5t_down[s];
++				}
++				if (any && !attention) {
++					j5t_release_all();
++				}
++			}
++		}
++		j5t_wait_ms(10);
++	}
++}
++
++static vm_offset_t
++j5t_map(DTEntry entry, const char *name, vm_size_t *size)
++{
++	uint64_t const *reg;
++	unsigned int len;
++	if (SecureDTGetProperty(entry, name, (void const **)&reg, &len) != kSuccess || len < 16) {
++		return 0;
++	}
++	if (size) {
++		*size = (vm_size_t)reg[1];
++	}
++	return ml_io_map((vm_offset_t)reg[0], (vm_size_t)reg[1]);
++}
++
++bool
++j5_touch_probe(void)
++{
++	DTEntry entry;
++	uint32_t const *u;
++	unsigned int len;
++	int enabled = 1, log = 0;
++	vm_offset_t peri_cmu, mif_cmu, nfc_pins, mif_pins;
++	uint8_t id = 0xff, ldo = 0xff, check = 0xff;
++	uint32_t msg = 0, status = 0;
++	thread_t thread;
++
++	if (SecureDTLookupEntry(NULL, "/j5-touch", &entry) != kSuccess) {
++		return false;
++	}
++	(void)PE_parse_boot_argn("j5touch", &enabled, sizeof(enabled));
++	(void)PE_parse_boot_argn("j5touchlog", &log, sizeof(log));
++	j5t_log = log != 0;
++	printf("J5 TOUCH: IST3038H probe enabled=%d log=%d\n", enabled, log);
++	if (!enabled) {
++		return true;
++	}
++	if (SecureDTGetProperty(entry, "max-x", (void const **)&u, &len) == kSuccess && len >= 4) {
++		j5t_max_x = *u;
++	}
++	if (SecureDTGetProperty(entry, "max-y", (void const **)&u, &len) == kSuccess && len >= 4) {
++		j5t_max_y = *u;
++	}
++	if (SecureDTGetProperty(entry, "flags", (void const **)&u, &len) == kSuccess && len >= 4) {
++		j5t_flags = *u;
++	}
++	j5t_i2c = j5t_map(entry, "i2c", NULL);
++	j5t_hsi = j5t_map(entry, "pmic-hsi2c", NULL);
++	j5t_alive = j5t_map(entry, "alive-pins", NULL);
++	peri_cmu = j5t_map(entry, "peri-cmu", NULL);
++	mif_cmu = j5t_map(entry, "mif-cmu", NULL);
++	nfc_pins = j5t_map(entry, "i2c-pins", NULL);
++	mif_pins = j5t_map(entry, "pmic-pins", NULL);
++	if (!j5t_i2c || !j5t_hsi || !j5t_alive || !peri_cmu || !mif_cmu || !nfc_pins || !mif_pins) {
++		printf("J5 TOUCH: MMIO mapping failed\n");
++		return true;
++	}
++
++	/* PMIC bus: MIF HSI2C gates and GPM0-0/1 function 2. */
++	printf("J5 TOUCH: MIF HSI2C gate %#x GPM0 con=%#x pud=%#x\n",
++	    j5t_rd(mif_cmu, 0x840), j5t_rd(mif_pins, 0), j5t_rd(mif_pins, 8));
++	j5t_wr(mif_cmu, 0x840, j5t_rd(mif_cmu, 0x840) | 0xcu);
++	j5t_wr(mif_pins, 0, (j5t_rd(mif_pins, 0) & ~0xffu) | 0x22u);
++	j5t_wr(mif_pins, 8, j5t_rd(mif_pins, 8) & ~0xfu);
++	delay(100);
++	j5t_hsi_init();
++	if (!j5t_pmic_read(0x00, &id) || !j5t_pmic_read(J5T_LDO34, &ldo)) {
++		printf("J5 TOUCH: S2MPU05 read failed; trying the touch IC anyway\n");
++	} else {
++		printf("J5 TOUCH: S2MPU05 ID=%#x LDO34=%#x\n", id, ldo);
++		if ((ldo & 0x3fu) != 0x3cu) {
++			printf("J5 TOUCH: LDO34 voltage selector is not 3.3 V, left unchanged\n");
++		} else if ((ldo & 0xc0u) != 0xc0u) {
++			if (!j5t_pmic_write(J5T_LDO34, ldo | 0xc0u) ||
++			    !j5t_pmic_read(J5T_LDO34, &check)) {
++				printf("J5 TOUCH: LDO34 enable failed\n");
++			} else {
++				printf("J5 TOUCH: LDO34 enabled, readback=%#x\n", check);
++				delay(100000);  /* IST30xx boot after power-on */
++			}
++		} else {
++			printf("J5 TOUCH: LDO34 already on\n");
++		}
++	}
++
++	/* Touch bus: PERI I2C2 gate and GPC2-0/1 function 2, no pulls. */
++	printf("J5 TOUCH: PERI BUS0 gate %#x GPC2 con=%#x pud=%#x GPA0 dat=%#x\n",
++	    j5t_rd(peri_cmu, 0x810), j5t_rd(nfc_pins, 0), j5t_rd(nfc_pins, 8),
++	    j5t_rd(j5t_alive, 0x44));
++	j5t_wr(peri_cmu, 0x810, j5t_rd(peri_cmu, 0x810) | (1u << 19));
++	j5t_wr(nfc_pins, 0, (j5t_rd(nfc_pins, 0) & ~0xffu) | 0x22u);
++	j5t_wr(nfc_pins, 8, j5t_rd(nfc_pins, 8) & ~0xfu);
++	delay(100);
++	printf("J5 TOUCH: I2C2 con=%#x stat=%#x lc=%#x\n",
++	    j5t_rd(j5t_i2c, IICCON), j5t_rd(j5t_i2c, IICSTAT), j5t_rd(j5t_i2c, IICLC));
++
++	bool ok = false;
++	for (unsigned attempt = 0; attempt < 10 && !ok; attempt++) {
++		ok = j5t_ist_read(IST_HIB_TOUCH_STATUS, &status) &&
++		    j5t_ist_read(IST_HIB_INTR_MSG, &msg);
++		if (!ok) {
++			delay(20000);
++		}
++	}
++	if (!ok) {
++		printf("J5 TOUCH: IST3038H does not answer at 0x50 (stat=%#x)\n",
++		    j5t_rd(j5t_i2c, IICSTAT));
++		return true;
++	}
++	printf("J5 TOUCH: IST3038H status=%#x msg=%#x max=%ux%u flags=%#x\n",
++	    status, msg, j5t_max_x, j5t_max_y, j5t_flags);
++	if (kernel_thread_start(j5t_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("J5 TOUCH: thread start failed\n");
++	}
++	return true;
++}
++#endif

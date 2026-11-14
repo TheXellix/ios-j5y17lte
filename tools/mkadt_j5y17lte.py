@@ -124,6 +124,27 @@ def build():
         ('stride', mkadt.u32(2880)),
         ('virtual-base', mkadt.u64(0x68000000)),
     ]))
+    # gpio_keys from the J5 DT: ALIVE pinctrl 0x139f0000, DAT = bank + 4,
+    # active low. Order = sweet_hid_key: power, volume up, volume down, home.
+    root.children.append(mkadt.node('j5-keys', [
+        ('reg', mkadt.u64(0x139f0000, 0x1000)),
+        ('keys', b''.join(mkadt.u32(v) for v in (0x44, 0, 0x84, 0, 0x84, 1, 0x64, 7))),
+    ]))
+    # Imagis IST3038H on I2C2 (s3c2440) 0x50, powered by S2MPU05 LDO34 over
+    # the MIF HSI2C; attention on GPA0-6 (patch j5 0006). flags: 1 swap,
+    # 2 invert x, 4 invert y (touch panel pixels, before scaling).
+    root.children.append(mkadt.node('j5-touch', [
+        ('i2c', mkadt.u64(0x13890000, 0x1000)),
+        ('pmic-hsi2c', mkadt.u64(0x10510000, 0x2000)),
+        ('alive-pins', mkadt.u64(0x139f0000, 0x1000)),
+        ('peri-cmu', mkadt.u64(0x101f0000, 0x1000)),
+        ('mif-cmu', mkadt.u64(0x10460000, 0x1000)),
+        ('i2c-pins', mkadt.u64(0x139c0000, 0x1000)),
+        ('pmic-pins', mkadt.u64(0x10530000, 0x1000)),
+        ('max-x', mkadt.u32(720)),
+        ('max-y', mkadt.u32(1280)),
+        ('flags', mkadt.u32(0)),
+    ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))
