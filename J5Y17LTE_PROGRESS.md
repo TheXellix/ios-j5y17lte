@@ -53,3 +53,12 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   console (use a5fb_perf=0).
 - patch j5 0003: CMD17 retry (up to 8, FIFO reset each attempt) and a
   1080x1920 iPhone 8 Plus canvas at 0x68000000 scaled 2/3 into the panel.
+- 2026-11-14 boot 3 (kernel run 4, cpus=4, console not muted): 4/4 CPUs
+  initialized, SGI1 verified. No eMMC CMD17 errors. backboardd presents 19
+  frames of the 1080x1920 surface; SpringBoard creates its own surfaces
+  (272x184, 360x246); PosterBoard crashes once (SIGTRAP), driverkitd once.
+  Userland reaches maild, bluetoothd, searchd, fairplayd. backboardd turns
+  the display off when idle (no touch input) -> use a5fb_keep_on=1. disp0
+  canvas changed to 1080x1920 (backboardd also created 720x1280 surfaces).
+- boot 4: kernel run 5 (patch j5 0004: RAM log continues while the panel
+  console is muted), cpus=4, a5fb_noconsole=1, a5fb_keep_on=1.
