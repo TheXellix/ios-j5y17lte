@@ -14,7 +14,7 @@ on:
         default: "227"
       runner:
         description: macOS runner image
-        default: macos-14
+        default: macos-15
   push:
     branches: [j5y17lte]
     paths:
@@ -38,7 +38,7 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner || 'macos-14' }}
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
