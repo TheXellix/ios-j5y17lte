@@ -72,3 +72,10 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   returns 0x8ead8ead (firmware not scanning). Patch j5 0008 sends the Linux
   ist30xx_start() commands (MODE_SPECIAL 0, FW_START 1) to HIB_CMD
   0xb00b013c and ignores the idle value.
+- 2026-11-14 boot 7 (patch j5 0008): start commands acked, firmware stays at
+  0x8ead8ead (IST30XX_INITIAL_VALUE, "end initial") with HIB_TOUCH_STATUS 0.
+  tools/j5-isttool (raw I2C from TWRP over /dev/i2c-11) shows the working
+  Linux state: status 0x....0075 with a running frame counter in [31:20],
+  INTR_MSG 0x08000800. Linux resume sends MODE_SPECIAL with
+  NOISE_MODE_POWER (bit 8); patch j5 0009 does the same and power-cycles
+  LDO34 (ist30xx_reset timing) if the firmware stays idle.

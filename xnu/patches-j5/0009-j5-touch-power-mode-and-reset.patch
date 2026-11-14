@@ -1,0 +1,70 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index 5831cb2..962d211 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -45,6 +45,7 @@ bool j5_touch_probe(void);
+ #define IST_IDLE_MSG         0x8ead8eadu    /* firmware not scanning */
+ #define IST_CMD_FW_START     0x01u
+ #define IST_CMD_MODE_SPECIAL 0x22u
++#define IST_NOISE_MODE_POWER (1u << 8)    /* Linux ist30xx_resume(): display on */
+ 
+ static vm_offset_t j5t_i2c, j5t_hsi, j5t_alive;
+ static uint32_t j5t_max_x = 720, j5t_max_y = 1280, j5t_flags;
+@@ -324,16 +325,36 @@ j5t_ist_write(uint32_t reg, uint32_t value)
+ 	return ok;
+ }
+ 
+-/* Linux ist30xx_start(): normal (non-TA) noise mode, then FW_START. */
++/* Linux ist30xx_resume() -> ist30xx_start(): noise_mode with the POWER bit
++ * (display on), then FW_START. Without POWER the firmware stays idle. */
+ static bool
+ j5t_ist_start_scan(void)
+ {
+-	bool a = j5t_ist_write(IST_HIB_CMD, IST_CMD_MODE_SPECIAL << 16);
++	bool a = j5t_ist_write(IST_HIB_CMD, (IST_CMD_MODE_SPECIAL << 16) | IST_NOISE_MODE_POWER);
+ 	bool b = j5t_ist_write(IST_HIB_CMD, (IST_CMD_FW_START << 16) | 1u);
+ 	printf("J5 TOUCH: start scan mode=%d fw_start=%d\n", a, b);
+ 	return a && b;
+ }
+ 
++/* Linux ist30xx_reset(): avdd off, 50 + 10 ms, avdd on, 60 ms. */
++static bool
++j5t_ist_power_cycle(void)
++{
++	uint8_t ldo = 0;
++	if (!j5t_pmic_read(J5T_LDO34, &ldo) || (ldo & 0x3fu) != 0x3cu) {
++		return false;
++	}
++	if (!j5t_pmic_write(J5T_LDO34, ldo & ~0xc0u)) {
++		return false;
++	}
++	delay(60000);
++	if (!j5t_pmic_write(J5T_LDO34, (ldo & 0x3fu) | 0xc0u)) {
++		return false;
++	}
++	delay(60000);
++	return true;
++}
++
+ /* ---- contacts ---- */
+ 
+ static void
+@@ -426,7 +447,8 @@ j5t_thread(void *arg, wait_result_t result)
+ 				j5t_release_all();
+ 			} else if (msg == IST_IDLE_MSG) {
+ 				if (++idle == 100 || (idle % 3000) == 0) {
+-					printf("J5 TOUCH: firmware idle (%#x), restarting scan\n", msg);
++					printf("J5 TOUCH: firmware idle (%#x), reset and restart\n", msg);
++					printf("J5 TOUCH: power cycle %d\n", j5t_ist_power_cycle());
+ 					(void)j5t_ist_start_scan();
+ 				}
+ 			} else if ((msg & 0xc00u) == 0xc00u && ((msg >> 12) & 0xfu) <= IST_MAX_FINGERS) {
+@@ -526,7 +548,7 @@ j5_touch_probe(void)
+ 				printf("J5 TOUCH: LDO34 enable failed\n");
+ 			} else {
+ 				printf("J5 TOUCH: LDO34 enabled, readback=%#x\n", check);
+-				delay(100000);  /* IST30xx boot after power-on */
++				delay(60000);   /* Linux ist30xx_power_on(): 60 ms */
+ 			}
+ 		} else {
+ 			printf("J5 TOUCH: LDO34 already on\n");
