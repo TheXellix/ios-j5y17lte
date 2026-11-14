@@ -109,6 +109,10 @@ def build():
     root.children.append(mkadt.node('j5-ramlog', [
         ('reg', mkadt.u64(0x46800000, 0x200000 - 0x1000)),
     ]))
+    # PMU window for the restart/panic -> TWRP path (J5 exynos,reboot node).
+    root.children.append(mkadt.node('j5-reset', [
+        ('reg', mkadt.u64(0x10480000, 0x1000)),
+    ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))

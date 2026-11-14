@@ -1,0 +1,79 @@
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 5782170..ccd12f5 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -897,6 +897,66 @@ j5_ramlog_probe(void)
+ }
+ #endif /* A5XELTE */
+ 
++#if defined(A5XELTE)
++/*
++ * j5y17lte: restart and panic reboot into TWRP through the Samsung
++ * sec_reboot path (PMU INFORM2 = 0x12345678, INFORM3 = recovery 0x12345674,
++ * SWRESET = 1). A software reset keeps DRAM, so the j5-ramlog ring survives
++ * and TWRP shows it in /proc/last_kmsg. ADT /j5-reset reg = PMU window.
++ * Needs a debug= value without DB_NMI (0x4), e.g. debug=0x8, otherwise XNU
++ * waits for a debugger after a panic. Disable with j5reset=0.
++ */
++extern int (*PE_halt_restart)(unsigned int type);
++static volatile uint32_t *j5_pmu;
++
++static int
++j5_halt_restart(unsigned int type)
++{
++	switch (type) {
++	case 0: /* kPEHaltCPU */
++	case 1: /* kPERestartCPU */
++	case 4: /* kPEPanicRestartCPU */
++	case 9: /* kPEPanicRestartCPUNoCallouts */
++		break;
++	default:
++		return 0;
++	}
++	if (j5_pmu == NULL) {
++		return -1;
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	j5_pmu[0x808 / 4] = 0x12345678u;
++	j5_pmu[0x80c / 4] = 0x12345674u;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	j5_pmu[0x400 / 4] = 1u;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	for (;;) {
++		__builtin_arm_wfe();
++	}
++}
++
++static void
++j5_reset_probe(void)
++{
++	DTEntry entry;
++	uint64_t const *reg;
++	unsigned int size;
++	int enabled = 1;
++
++	(void)PE_parse_boot_argn("j5reset", &enabled, sizeof(enabled));
++	if (!enabled || PE_halt_restart != NULL ||
++	    SecureDTFindEntry("name", "j5-reset", &entry) != kSuccess ||
++	    SecureDTGetProperty(entry, "reg", (void const **)&reg, &size) != kSuccess ||
++	    size < 16 || reg[1] < 0x1000) {
++		return;
++	}
++	j5_pmu = (volatile uint32_t *)ml_io_map(reg[0], 0x1000);
++	if (j5_pmu != NULL) {
++		PE_halt_restart = j5_halt_restart;
++	}
++}
++#endif /* A5XELTE */
++
+ static void
+ fbcon_probe(void)
+ {
+@@ -1016,6 +1076,7 @@ serial_init(void)
+ 	fbcon_probe();
+ #if defined(A5XELTE)
+ 	j5_ramlog_probe();
++	j5_reset_probe();
+ #endif
+ 
+ #ifdef PI3_UART
