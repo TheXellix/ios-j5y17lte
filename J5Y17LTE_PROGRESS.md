@@ -125,3 +125,6 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
 - boot 17 (patch 0017, a5gpu=4): still DATA_INVALID_FAULT 0x58. Mesa pan_props:
   T820/T830 have no_hierarchical_tiling like the T720. Patch j5 0018: disabled
   tiler with USER mask 4095, 516-byte list, body magic 0xa0000000.
+- boot 18 (patch 0018, a5gpu=4): the T830 MFBD fragment job completes (JOB_IRQ
+  done, header DONE, no MMU/GPU fault), but 0/256 pixels match. Patch j5 0019:
+  RT clean pixel write enable (clear-only frame) and a readback log.

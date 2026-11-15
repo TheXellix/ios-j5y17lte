@@ -1,0 +1,29 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index df4da3a..8d3c637 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -534,6 +534,9 @@ a5g3d_queue_submit(IOService *service, vm_offset_t gpu,
+             bytes + kA5G3DDataOffset + request.readbackOffset);
+         for (unsigned i = 0; i < request.readbackLength / 4; ++i)
+             matchingWords += readback[i] == request.expectedWord;
++        if ((a5g3d_read32(gpu, 0) >> 16) == 0x830u)
++            IOLog("J5 G3D: readback[0]=%08x [last]=%08x expected=%08x\n",
++                readback[0], readback[request.readbackLength / 4 - 1], request.expectedWord);
+     }
+     if (jobIRQ)
+         a5g3d_write32(gpu, 0x1004, jobIRQ);
+@@ -786,8 +789,12 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+             reinterpret_cast<uint64_t *>(fb)[11] = polygonVA;       /* heap end */
+             fb[32] = 1u << 26;                  /* internal format R8G8B8A8 */
+             fb[33] = 1u | (19u << 3) | (2u << 10) | (1u << 15) |
+-                (0x688u << 16);                 /* write, RGBA8, linear,
+-                                                  * dither, swizzle RGBA */
++                (0x688u << 16) | (1u << 31);    /* write, RGBA8, linear,
++                                                  * dither, swizzle RGBA,
++                                                  * clean pixel write: a
++                                                  * clear-only frame has only
++                                                  * clean tiles (Mesa
++                                                  * pan_clean_tile_write_rt) */
+             fb[34] = 0;                         /* no preload/unload */
+             reinterpret_cast<uint64_t *>(fb)[20] = pixelsVA;        /* writeback base */
+             fb[42] = scanout ? kA5G3DScanoutStride : 64;           /* row stride */
