@@ -177,3 +177,9 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   the runtime queue was refused — a5g3d_queue_acquire checked the A5's
   G3D power/clock registers (PMU +0x64, CMU 0x800/0x900). Patch 0027 uses
   the J5 ones (pd-g3d +0x4, CMU_G3D 0x804/0x808).
+- 2026-11-15 boot 28 (run25, patch 0027): **first iOS frames scaled and
+  presented by the Mali-T830** ("A5XELTE G3D: full-frame source=3 fences
+  3/4 shown=1"), no fallback, fault or DMA-uncertain lines. User: image
+  correct, very fluid, ~10-12 FPS by eye (the CoreAnimation software
+  renderer is now the limit), boot still ~3 min. Metal is not available
+  to iOS (no IOAcceleratorES / Metal device on the T830 yet).
