@@ -140,3 +140,7 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
 - 2026-11-15 boot 22 (patch j5 0020, a5gpu=7): first T830 shader. Tiler job (slot
   1) DONE in 0.2 ms, fragment job (slot 0) DONE in 0.15 ms; the Mesa-compiled
   Midgard copy shader sampled the red texture over a black clear: 256/256.
+- boot 23 (a5gpu=6): both fenced clears complete, red then green, 256/256 each.
+  All A5 private GPU stages 3-7 now pass on the J5 Mali-T830. Next: the iOS
+  Metal path (a5mali-metal plugin, on-device shader compiler, native queue)
+  still emits T720 v4 descriptors and must move to v5.
