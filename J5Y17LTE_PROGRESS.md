@@ -92,3 +92,11 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   finger 1, bit 11 only, top byte varies), release 0x08000800; coordinates
   0x11xxxyyy (id [31:28], x [23:12], y [11:0]) in 720x1280 panel pixels.
   Patch j5 0012 accepts bit-11 messages.
+- 2026-11-15 boot 11 (patch j5 0012): touch works (taps, swipes, slide to
+  power off). SpringBoard SIGTRAP after opening/closing the notification
+  centre, preceded by a 3.1 s "Completed Runloop Hang"; iOS sees the display
+  as 360x640@3x (1080x1920), not a real iPhone geometry.
+- patch j5 0013: canvas size from /j5-panel canvas-width/height, each
+  presented layer scaled straight into the panel (no uncached canvas pass),
+  HID and touch target size from the ADT. tools/mkadt_j5y17lte.py --model
+  iphone8 selects iPhone10,4 / D201AP, display-scale 2, 750x1334.

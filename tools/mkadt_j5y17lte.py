@@ -28,7 +28,18 @@ def child(node, name):
     raise ValueError(f'missing donor ADT node {name}')
 
 
-def build():
+# Userland model: 'iphone8plus' (1080x1920 @3x, D211AP) or 'iphone8'
+# (750x1334 @2x, D201AP: 2.2x fewer pixels, near the 720x1280 panel).
+MODELS = {
+    'iphone8plus': dict(product='iPhone10,5', board='D211AP', target='D211',
+                        width=1080, height=1920, scale=3),
+    'iphone8': dict(product='iPhone10,4', board='D201AP', target='D201',
+                    width=750, height=1334, scale=2),
+}
+
+
+def build(model='iphone8plus'):
+    m = MODELS[model]
     # The donor's optional /product is D22AP-specific Apple metadata.
     root = mkadt.build(seed=os.urandom(64), qemu=True, donor_product=False)
     set_prop(root, 'compatible', mkadt.cstr('samsung,j5y17lte') +
@@ -91,9 +102,9 @@ def build():
     arm_io.children.append(mkadt.node('disp0', [
         ('device_type', mkadt.cstr('display-subsystem')),
         ('compatible', mkadt.cstr('samsung,a5xelte-display')),
-        # iOS sees the iPhone 8 Plus 1080x1920 canvas (j5-panel scales it).
-        ('canvas-width', mkadt.u32(1080)),
-        ('canvas-height', mkadt.u32(1920)),
+        # iOS canvas (j5-panel scales it to the panel).
+        ('canvas-width', mkadt.u32(m['width'])),
+        ('canvas-height', mkadt.u32(m['height'])),
     ]))
     # No GPU nub: the A5 Mali-T720 stage is not ported to the J5 Mali-T830.
     root.children = [n for n in root.children if n.prop('name') not in
@@ -123,6 +134,8 @@ def build():
         ('height', mkadt.u32(1280)),
         ('stride', mkadt.u32(2880)),
         ('virtual-base', mkadt.u64(0x68000000)),
+        ('canvas-width', mkadt.u32(m['width'])),
+        ('canvas-height', mkadt.u32(m['height'])),
     ]))
     # gpio_keys from the J5 DT: ALIVE pinctrl 0x139f0000, DAT = bank + 4,
     # active low. Order = sweet_hid_key: power, volume up, volume down, home.
@@ -144,17 +157,28 @@ def build():
         ('max-x', mkadt.u32(720)),
         ('max-y', mkadt.u32(1280)),
         ('flags', mkadt.u32(0)),
+        ('target-width', mkadt.u32(m['width'])),
+        ('target-height', mkadt.u32(m['height'])),
     ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))
-    return a5xelte_identity.apply(root)
+    root = a5xelte_identity.apply(root)
+    set_prop(chosen, 'display-scale', mkadt.u32(m['scale']))
+    set_prop(root, 'model', mkadt.cstr(m['product']))
+    set_prop(root, 'target-type', mkadt.cstr(m['target']))
+    set_prop(root, 'target-sub-type', mkadt.cstr(m['board']))
+    compat = root.prop('compatible').split(b'\0')
+    compat[0], compat[1] = m['board'].encode(), m['product'].encode()
+    set_prop(root, 'compatible', b'\0'.join(compat))
+    return root
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--model', choices=sorted(MODELS), default='iphone8plus')
     args = parser.parse_args()
-    blob = adt.serialize(build())
+    blob = adt.serialize(build(args.model))
     args.output.write_bytes(blob)
     print(f'{args.output}: {len(blob)} bytes')
