@@ -158,3 +158,10 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   902 737.5, 1014 781.25, 1144 825.0, 1248 868.75, 1352 906.25,
   1482 956.25, 1586 1006.25 mV. S2MPU05 BUCK1: CTRL1 0x1a, OUT 0x1b,
   V = 400 mV + 6.25 mV * code.
+- 2026-11-15 boot 25 (run21, cpus=8): **all 8 CPUs online** (one logical
+  cluster), SpringBoard up, battery correct on screen (user). J5 CLOCK:
+  both CPUCL PLLs 0xa15b0501 = 902.2 MHz (P5 M347 S1), dividers 0, but the
+  PMU cycle counter measured only 302 MHz. Patch 0024 adds a calibrated
+  spin-loop check (2 cycles/iteration: 449.8 M it/s at 902 MHz, 791.2 M
+  at 1586 MHz in TWRP) and j5cpufreq=MHz DVFS (BUCK1 + PLL, ECT values:
+  1586 = P3 M183 S0, same bus dividers as 902).

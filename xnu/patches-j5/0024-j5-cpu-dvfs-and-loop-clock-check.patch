@@ -1,0 +1,145 @@
+diff --git a/bsd/dev/j5_battery.c b/bsd/dev/j5_battery.c
+index 3a385ca..48f90f5 100644
+--- a/bsd/dev/j5_battery.c
++++ b/bsd/dev/j5_battery.c
+@@ -299,9 +299,11 @@ j5_clock_report(void)
+ 			continue;
+ 		}
+ 		uint32_t con0 = j5b_rd(cmu, 0x100);
+-		printf("J5 CLOCK: CPUCL%u pll_con0=%#x (%u MHz) mux_pll=%#x mux_clk=%#x div1=%#x div2=%#x\n",
++		printf("J5 CLOCK: CPUCL%u pll_con0=%#x (%u MHz) mux_pll=%#x mux_clk=%#x div %x %x %x %x %x %x %x %x %x %x\n",
+ 		    c, con0, j5c_pll_mhz(con0), j5b_rd(cmu, 0x200), j5b_rd(cmu, 0x208),
+-		    j5b_rd(cmu, 0x400), j5b_rd(cmu, 0x404));
++		    j5b_rd(cmu, 0x400), j5b_rd(cmu, 0x404), j5b_rd(cmu, 0x408), j5b_rd(cmu, 0x40c),
++		    j5b_rd(cmu, 0x410), j5b_rd(cmu, 0x414), j5b_rd(cmu, 0x418), j5b_rd(cmu, 0x41c),
++		    j5b_rd(cmu, 0x420), j5b_rd(cmu, 0x424));
+ 	}
+ 
+ 	uint64_t pmcr;
+@@ -318,7 +320,17 @@ j5_clock_report(void)
+ 	__asm__ volatile("isb; mrs %0, PMCCNTR_EL0" : "=r"(c1));
+ 	ml_set_interrupts_enabled(istate);
+ 	uint64_t ticks = t1 - t0, cycles = c1 - c0;
+-	printf("J5 CLOCK: cpu%d measured %llu MHz (%llu cycles in %llu ticks, pmcr=%#llx)\n",
+-	    cpu_number(), (cycles * 26ull) / (ticks ? ticks : 1), cycles, ticks, pmcr);
++	/* Independent check: 2 cycles per iteration on the A53 (calibrated in
++	 * TWRP at fixed 902 and 1586 MHz: 449.8 / 791.2 M iterations/s). */
++	istate = ml_set_interrupts_enabled(FALSE);
++	uint64_t n = 10000000, s0 = mach_absolute_time();
++	__asm__ volatile("1: subs %0, %0, #1\n add x9, x9, #1\n add x9, x9, #1\n b.ne 1b"
++	    : "+r"(n) :: "x9", "cc");
++	uint64_t s1 = mach_absolute_time();
++	ml_set_interrupts_enabled(istate);
++	uint64_t spin = s1 - s0;
++	printf("J5 CLOCK: cpu%d pmu %llu MHz (%llu cycles/%llu ticks, pmcr=%#llx), loop %llu MHz (%llu ticks)\n",
++	    cpu_number(), (cycles * 26ull) / (ticks ? ticks : 1), cycles, ticks, pmcr,
++	    (20000000ull * 26ull) / (spin ? spin : 1), spin);
+ }
+ #endif
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index d1e8f59..c072bc9 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -181,6 +181,93 @@ j5t_pmic_write(uint8_t reg, uint8_t value)
+ 	return false;
+ }
+ 
++
++/*
++ * CPU DVFS (j5cpufreq=MHz, both clusters; BUCK1 is shared). S-Boot leaves
++ * both CPUCL PLLs at 902.2 MHz (P5 M347 S1). Values are this phone's ECT
++ * (/sys/kernel/debug/ect in TWRP): every level >= 1014 MHz uses P=3, S=0,
++ * M = MHz * 3 / 26; the ACLK/PCLK/ATCLK/PCLKDBG/CNTCLK dividers are the same
++ * for 902 and 1586. BUCK1 voltages were read from the TWRP kernel at each
++ * level (V = 400 mV + 6.25 mV * code); one extra 12.5 mV step is added.
++ * Order as the Samsung DFS: voltage up, PLL mux -> OSCCLK, new PMS, wait
++ * for lock, mux -> PLL.
++ */
++void j5_clock_report(void);
++
++static void
++j5_cpu_boost(void)
++{
++	static const struct { unsigned mhz, mv100; } levels[] = {
++		{1014, 7812}, {1144, 8250}, {1248, 8688}, {1352, 9062},
++		{1482, 9562}, {1586, 10062},
++	};
++	unsigned want = 0;
++	(void)PE_parse_boot_argn("j5cpufreq", &want, sizeof(want));
++	if (!want) {
++		return;
++	}
++	unsigned mv100 = 0;
++	for (unsigned i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
++		if (levels[i].mhz == want) {
++			mv100 = levels[i].mv100;
++		}
++	}
++	if (!mv100) {
++		printf("J5 DVFS: %u MHz is not a supported level\n", want);
++		return;
++	}
++	uint8_t ctrl = 0, vsel = 0;
++	if (!j5t_pmic_read(0x1a, &ctrl) || !j5t_pmic_read(0x1b, &vsel)) {
++		printf("J5 DVFS: BUCK1 read failed\n");
++		return;
++	}
++	/* code for the measured voltage, + 2 steps (12.5 mV) of margin */
++	unsigned code = (mv100 * 100u - 400000u) / 6250u + 2u;
++	printf("J5 DVFS: BUCK1 ctrl=%#x vsel=%#x (%u uV) -> code %#x (%u uV) for %u MHz\n",
++	    ctrl, vsel, 400000u + 6250u * vsel, code, 400000u + 6250u * code, want);
++	if (vsel < 0x28 || vsel > 0x70 || code > 0x70 || code < vsel) {
++		printf("J5 DVFS: unexpected BUCK1 state, not changing\n");
++		return;
++	}
++	uint8_t check = 0;
++	if (!j5t_pmic_write(0x1b, (uint8_t)code) || !j5t_pmic_read(0x1b, &check) || check != code) {
++		printf("J5 DVFS: BUCK1 write failed (readback %#x)\n", check);
++		return;
++	}
++	delay(1000);    /* ramp 12 mV/us: 50 us needed */
++
++	const unsigned m = want * 3u / 26u;
++	static const uint32_t bases[2] = {0x10900000u, 0x10800000u};
++	for (unsigned c = 0; c < 2; c++) {
++		vm_offset_t cmu = ml_io_map(bases[c], 0x1000);
++		if (!cmu) {
++			continue;
++		}
++		uint32_t con0 = j5t_rd(cmu, 0x100), mux = j5t_rd(cmu, 0x200);
++		j5t_wr(cmu, 0x200, mux & ~(1u << 12));              /* OSCCLK */
++		delay(10);
++		uint32_t next = con0 & ~((0x3ffu << 16) | (0x3fu << 8) | 7u | (1u << 26));
++		next |= (m << 16) | (3u << 8) | (1u << 5);
++		j5t_wr(cmu, 0x000, 3u * 150u);                      /* lock time */
++		j5t_wr(cmu, 0x100, next);
++		unsigned n = 0;
++		while (!(j5t_rd(cmu, 0x100) & (1u << 29)) && n < 100000) {
++			n++;
++			delay(1);
++		}
++		bool locked = (j5t_rd(cmu, 0x100) & (1u << 29)) != 0;
++		if (!locked) {
++			j5t_wr(cmu, 0x100, con0);                   /* back to 902 */
++			delay(1000);
++		}
++		j5t_wr(cmu, 0x200, mux | (1u << 12));               /* PLL */
++		delay(10);
++		printf("J5 DVFS: CPUCL%u pll %#x -> %#x locked=%d after %u us\n",
++		    c, con0, j5t_rd(cmu, 0x100), locked, n);
++	}
++	j5_clock_report();
++}
++
+ /* ---- I2C2 (s3c2440 controller, polled) ---- */
+ 
+ #define IICCON  0x00u
+@@ -585,6 +672,8 @@ j5_touch_probe(void)
+ 		}
+ 	}
+ 
++	j5_cpu_boost();
++
+ 	/* Touch bus: PERI I2C2 gate and GPC2-0/1 function 2, no pulls. */
+ 	printf("J5 TOUCH: PERI BUS0 gate %#x GPC2 con=%#x pud=%#x GPA0 dat=%#x\n",
+ 	    j5t_rd(peri_cmu, 0x810), j5t_rd(nfc_pins, 0), j5t_rd(nfc_pins, 8),
