@@ -172,3 +172,8 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   T830 texture fixture 256/256 and the private runtime queue is ready, but
   the full-frame GPU present silently fell back to the CPU: patch 0025
   logs the reason. j5-boot.sh now defaults to cpus=8 j5cpufreq=1586.
+- 2026-11-15 boot 27 (run24): display off/on now blanks the AMOLED panel
+  (user: works). GPU present: every full-screen swap passes the gate but
+  the runtime queue was refused — a5g3d_queue_acquire checked the A5's
+  G3D power/clock registers (PMU +0x64, CMU 0x800/0x900). Patch 0027 uses
+  the J5 ones (pd-g3d +0x4, CMU_G3D 0x804/0x808).

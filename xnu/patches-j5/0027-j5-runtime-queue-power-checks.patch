@@ -1,0 +1,24 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index 532134c..ef9304e 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -286,9 +286,16 @@ a5g3d_queue_acquire(IOService *owner, uint64_t *token,
+     if (!owner || owner != gA5G3DQueueOwner || !gA5G3DRuntimeReady ||
+         !token || !backing || !gpuMMIO || !gA5G3DRuntimePMU ||
+         !gA5G3DRuntimeCMU ||
+-        (a5g3d_read32(gA5G3DRuntimePMU, 0x64) & 0xf) != 0xf ||
+-        (a5g3d_read32(gA5G3DRuntimeCMU, 0x800) & 0x13) != 0x13 ||
+-        (a5g3d_read32(gA5G3DRuntimeCMU, 0x900) & 0x13) != 0x13 ||
++        /* G3D power domain and clock gates: A5 PMU +0x64, CMU 0x800/0x900;
++         * j5y17lte pd-g3d +0x4, CMU_G3D 0x804 bits 0-1 and 0x808 bit 0
++         * (same checks as a5g3d_probe_existing_power). */
++        (gA5G3DIsT830 ?
++            ((a5g3d_read32(gA5G3DRuntimePMU, 0x4) & 0xf) != 0xf ||
++             (a5g3d_read32(gA5G3DRuntimeCMU, 0x804) & 0x3) != 0x3 ||
++             (a5g3d_read32(gA5G3DRuntimeCMU, 0x808) & 0x1) != 0x1) :
++            ((a5g3d_read32(gA5G3DRuntimePMU, 0x64) & 0xf) != 0xf ||
++             (a5g3d_read32(gA5G3DRuntimeCMU, 0x800) & 0x13) != 0x13 ||
++             (a5g3d_read32(gA5G3DRuntimeCMU, 0x900) & 0x13) != 0x13)) ||
+         !__sync_bool_compare_and_swap(&gA5G3DQueueState, 0u, 3u))
+         return false;
+     const uint64_t next = ++gA5G3DReservationNext;
