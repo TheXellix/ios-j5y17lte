@@ -128,3 +128,6 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
 - boot 18 (patch 0018, a5gpu=4): the T830 MFBD fragment job completes (JOB_IRQ
   done, header DONE, no MMU/GPU fault), but 0/256 pixels match. Patch j5 0019:
   RT clean pixel write enable (clear-only frame) and a readback log.
+- 2026-11-15 boot 19 (patch j5 0019, a5gpu=4): first T830 render. The MFBD
+  fragment clear writes 256/256 red pixels (readback ff0000ff), job DONE in
+  92 us, no faults.
