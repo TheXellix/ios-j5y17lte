@@ -9,7 +9,7 @@ kernel=$1 out=$2; shift 2
 flash=0
 if [ "${1:-}" = --flash ]; then flash=1; shift; fi
 model=${J5_MODEL:-iphone8}
-args="debug=0x8 serial=3 cpus=4 keepsyms=1 -enable_kprintf_spam -noprogress wdt=-1 wdt_test=no_user_checkin a5touch=0 a5touchprobe=0 a5fb_perf=0 a5fb_noconsole=1 a5fb_keep_on=1 a5emmc_blocks=32 rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1 launchd_unsecure_cache=1 cs_enforcement_disable=1 unentitled_ios_sim_launch=1 ignition_level=1 $*"
+args="debug=0x8 serial=3 cpus=${CPUS:-4} keepsyms=1 -enable_kprintf_spam -noprogress wdt=-1 wdt_test=no_user_checkin a5touch=0 a5touchprobe=0 a5fb_perf=0 a5fb_noconsole=1 a5fb_keep_on=1 a5emmc_blocks=32 rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1 launchd_unsecure_cache=1 cs_enforcement_disable=1 unentitled_ios_sim_launch=1 ignition_level=1 $*"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export CC=${CC:-clang} LD=${LD:-ld.lld} OBJCOPY=${OBJCOPY:-llvm-objcopy} A5_TARGET_FLAGS=${A5_TARGET_FLAGS:---target=aarch64-none-elf}
 RAM_MIB=736 sh "$here/shim/j5y17lte/build-xnu-boot.sh" >/dev/null

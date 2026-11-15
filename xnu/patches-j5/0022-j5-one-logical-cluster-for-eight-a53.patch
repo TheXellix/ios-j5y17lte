@@ -1,0 +1,32 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 84bfd8a..828964e 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1050,7 +1050,26 @@ ml_parse_cpu_topology(void)
+ 		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+-#if HAS_CLUSTER || defined(A5XELTE)
++#if defined(A5XELTE)
++		/*
++		 * j5y17lte: two identical Cortex-A53 clusters (MPIDR 0x00x, 0x10x).
++		 * Two SMP psets panic on a pset0 ticket lock while CPU 2 comes up
++		 * ("unexpectedly owned", boot 24), as on the A5. Like the Sweet
++		 * port (one homogeneous cluster for all eight cores), merge both
++		 * physical clusters into logical cluster 0 unless j5clusters=2.
++		 */
++		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
++		{
++			static int j5_clusters = -1;
++			if (j5_clusters < 0) {
++				j5_clusters = 1;
++				(void)PE_parse_boot_argn("j5clusters", &j5_clusters, sizeof(j5_clusters));
++			}
++			if (j5_clusters == 1) {
++				phys_cluster_id = 0;
++			}
++		}
++#elif HAS_CLUSTER
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
+ #else
+ 		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
