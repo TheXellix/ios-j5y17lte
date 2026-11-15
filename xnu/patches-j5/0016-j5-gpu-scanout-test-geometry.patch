@@ -1,0 +1,19 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index f4d75cb..7ddf485 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -72,9 +72,11 @@ static const uint32_t kA5G3DFragmentPixels = 16 * 16;
+ static const uint32_t kA5G3DFragmentRed = 0xff0000ff;
+ static const uint32_t kA5G3DScanoutGreen = 0xff00ff00;
+ static const uint64_t kA5G3DScanoutVA = kA5G3DTestVA + 0x10000;
+-static const uint32_t kA5G3DScanoutStride = 4320;
+-static const uint32_t kA5G3DScanoutX = 528;
+-static const uint32_t kA5G3DScanoutY = 944;
++/* j5y17lte: 720x1280 DECON scanout (2880-byte rows); the 16x16 test patch
++ * sits at the panel centre. (A5: 4320 / 528 / 944 for 1080x1920.) */
++static const uint32_t kA5G3DScanoutStride = 2880;
++static const uint32_t kA5G3DScanoutX = 352;
++static const uint32_t kA5G3DScanoutY = 632;
+ static const uint64_t kA5G3DScanoutPixelPhys = 0x67000000ULL +
+     kA5G3DScanoutY * kA5G3DScanoutStride + kA5G3DScanoutX * 4;
+ static const uint64_t kA5G3DScanoutPagePhys = kA5G3DScanoutPixelPhys & ~0xfffULL;

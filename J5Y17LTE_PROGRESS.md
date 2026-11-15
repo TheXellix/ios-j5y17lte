@@ -112,3 +112,8 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   busy (was 4.5), max request 27 ms (was 407), no errors.
 - patch j5 0015: A5XELTEGPU accepts the J5 Mali-T830 (pd-g3d/CMU_G3D gates,
   inherited clock, SC_LS_ALLOW_ATTR_TYPES quirk); ADT gpu nub; tools/j5-boot.sh.
+- 2026-11-15 boot 15 (patch j5 0015, a5gpu=3): first Mali-T830 job. L2,
+  shader and tiler power on (ready=1 each, T830 shader config 0x10000 read
+  back), the private WRITE_VALUE job completes through AS0 in 65 us with
+  header DONE, no MMU/GPU fault and both readback words correct.
+- patch j5 0016: scanout clear test (a5gpu=5) at the J5 panel centre.
