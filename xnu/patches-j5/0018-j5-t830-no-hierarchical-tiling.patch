@@ -1,0 +1,20 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index 0fc07ed..df4da3a 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -773,8 +773,13 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+                                                   * 1 KiB colour buffer, 1 RT */
+             fb[12] = 1u << 16;                  /* Z internal D24, no ZS writes */
+             fb[13] = 0;                         /* Z clear 0.0 */
+-            fb[14] = 512;                       /* polygon list: minimum header */
+-            fb[15] = 4096;                      /* hierarchy mask: tiler disabled */
++            /* Mesa pan_props: T820/T830 have no_hierarchical_tiling, like
++             * the T720: a disabled tiler uses the USER hierarchy mask, a
++             * 512 + 4 byte list and the empty-body magic (pan_cmdstream.c). */
++            fb[14] = 516;                       /* polygon list: header + 4 */
++            fb[15] = 4095;                      /* hierarchy mask: user */
++            reinterpret_cast<uint32_t *>(bytes + kA5G3DDataOffset +
++                kA5G3DPolygonListOffset)[128] = 0xa0000000; /* empty-list body */
+             reinterpret_cast<uint64_t *>(fb)[8] = polygonVA;        /* polygon list */
+             reinterpret_cast<uint64_t *>(fb)[9] = polygonVA + 512;  /* body */
+             reinterpret_cast<uint64_t *>(fb)[10] = polygonVA;       /* heap start */

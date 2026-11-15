@@ -122,3 +122,6 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   SFBD (Panfrost arch v4); the T830 is arch v5 and needs an MFBD.
 - patch j5 0017: T830 MFBD fixture (Mesa genxml v5: local storage, parameters,
   disabled tiler context, RGB render target 0; framebuffer pointer bit 0).
+- boot 17 (patch 0017, a5gpu=4): still DATA_INVALID_FAULT 0x58. Mesa pan_props:
+  T820/T830 have no_hierarchical_tiling like the T720. Patch j5 0018: disabled
+  tiler with USER mask 4095, 516-byte list, body magic 0xa0000000.
