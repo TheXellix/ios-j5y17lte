@@ -1,0 +1,87 @@
+#!/bin/bash
+# Install the j5y17lte Mali-T830 Metal userland into the iOS root HFS image.
+#
+#   j5-install-metal.sh ROOT.img PAYLOAD_DIR
+#
+# PAYLOAD_DIR is the unpacked "metal-ios" CI artifact:
+#   plugin/A5MaliMetal.bundle, plugin/a5mali-metal-probe (optional),
+#   compiler/a5shader-compile, compiler/a5shader/*, compiler/compiler-launchdaemon.plist
+#
+# Installs
+#   /System/Library/Extensions/A5MaliMetal.bundle
+#   /usr/libexec/a5shader-compile, /usr/libexec/a5shader/
+#   /System/Library/LaunchDaemons/com.orhunnx.a5shader-compile.plist
+# and adds that job (plus CA_IGNORE_MACH_SEND_ERRORS=1 for backboardd, as on
+# the A5) to the launchd cache /System/Library/xpc/launchd.plist, keeping a
+# one-time backup launchd.plist.j5-orig. Needs sudo for mount/copy only.
+# The phone is not touched: flash the changed chunks afterwards with
+#   tools/j5-flash-userdata.sh --changed ROOT.img
+set -euo pipefail
+img=$(realpath "$1")
+payload=$(realpath "$2")
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+bundle="$payload/plugin/A5MaliMetal.bundle"
+comp="$payload/compiler"
+for f in "$bundle/A5MaliMetal" "$bundle/Info.plist" "$comp/a5shader-compile" \
+         "$comp/a5shader/metal2vulkan" "$comp/a5shader/midgard-compile" \
+         "$comp/a5shader/spirv-val" "$comp/a5shader/pairs.json" \
+         "$comp/a5shader/profile.json" "$comp/compiler-launchdaemon.plist"; do
+	[ -f "$f" ] || { echo "missing $f" >&2; exit 2; }
+done
+mnt=$(mktemp -d /tmp/j5root.XXXXXX)
+tmp=$(mktemp -d)
+cleanup() {
+	mountpoint -q "$mnt" && sudo umount "$mnt" || true
+	rmdir "$mnt" 2>/dev/null || true
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+sudo mount -t hfsplus -o loop,force,rw "$img" "$mnt"
+[ -f "$mnt/System/Library/xpc/launchd.plist" ] || { echo "not an iOS root: $img" >&2; exit 3; }
+
+echo "== bundle"
+sudo rm -rf "$mnt/System/Library/Extensions/A5MaliMetal.bundle"
+sudo cp -a "$bundle" "$mnt/System/Library/Extensions/A5MaliMetal.bundle"
+sudo chown -R 0:0 "$mnt/System/Library/Extensions/A5MaliMetal.bundle"
+sudo chmod -R go-w "$mnt/System/Library/Extensions/A5MaliMetal.bundle"
+
+echo "== compiler service"
+sudo install -o 0 -g 0 -m 0755 "$comp/a5shader-compile" "$mnt/usr/libexec/a5shader-compile"
+sudo rm -rf "$mnt/usr/libexec/a5shader"
+sudo install -d -o 0 -g 0 -m 0755 "$mnt/usr/libexec/a5shader"
+for t in metal2vulkan midgard-compile midgard-generic602 spirv-val; do
+	[ -f "$comp/a5shader/$t" ] && sudo install -o 0 -g 0 -m 0755 "$comp/a5shader/$t" "$mnt/usr/libexec/a5shader/$t"
+done
+for j in pairs.json profile.json; do
+	sudo install -o 0 -g 0 -m 0644 "$comp/a5shader/$j" "$mnt/usr/libexec/a5shader/$j"
+done
+sudo install -o 0 -g 0 -m 0644 "$comp/compiler-launchdaemon.plist" \
+	"$mnt/System/Library/LaunchDaemons/com.orhunnx.a5shader-compile.plist"
+
+echo "== launchd cache"
+cache="$mnt/System/Library/xpc/launchd.plist"
+[ -f "$cache.j5-orig" ] || sudo cp -a "$cache" "$cache.j5-orig"
+sudo cat "$cache.j5-orig" > "$tmp/orig.plist"
+python3 - "$tmp/orig.plist" "$comp/compiler-launchdaemon.plist" "$tmp/new.plist" <<'PY'
+import plistlib, sys
+cache = plistlib.loads(open(sys.argv[1], 'rb').read())
+job = plistlib.loads(open(sys.argv[2], 'rb').read())
+jobs = cache['LaunchDaemons']
+jobs['/System/Library/LaunchDaemons/com.orhunnx.a5shader-compile.plist'] = job
+bb = jobs.get('/System/Library/LaunchDaemons/com.apple.backboardd.plist')
+if not bb or bb.get('Label') != 'com.apple.backboardd':
+    raise SystemExit('backboardd job not found in the launchd cache')
+env = dict(bb.get('EnvironmentVariables', {}))
+env['CA_IGNORE_MACH_SEND_ERRORS'] = '1'
+bb['EnvironmentVariables'] = env
+open(sys.argv[3], 'wb').write(plistlib.dumps(cache, fmt=plistlib.FMT_BINARY, sort_keys=False))
+print('launchd cache: %d jobs, compiler job added' % len(jobs))
+PY
+sudo install -o 0 -g 0 -m 0644 "$tmp/new.plist" "$cache"
+
+sync
+sudo umount "$mnt"
+echo "== fsck"
+sudo fsck.hfsplus -f -y "$img" || true
+echo "installed; now flash: $here/tools/j5-flash-userdata.sh --changed $img"

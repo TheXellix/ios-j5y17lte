@@ -5,10 +5,14 @@
 # stream once lost the final 1.5 MB (the HFS alternate volume header)
 # without any error.
 #
-#   j5-flash-userdata.sh IMAGE [FIRST_CHUNK]
+#   j5-flash-userdata.sh [--changed] IMAGE [FIRST_CHUNK]
+# --changed: read each chunk's md5 on the phone first and skip equal chunks
+# (after a small in-place change to the image, e.g. j5-install-metal.sh).
 # Only ever talk to the J5 (other phones may be attached over USB).
 export ANDROID_SERIAL="${ANDROID_SERIAL:-5200479dc6a79451}"
 set -eu
+changed=0
+if [ "${1:-}" = --changed ]; then changed=1; shift; fi
 img=$1
 first=${2:-0}
 part=/dev/block/by-name/USERDATA
@@ -29,6 +33,14 @@ while [ "$i" -lt "$count" ]; do
 	dd if="$img" of="$tmp/c" bs=1M skip=$((i * chunk_mib)) count=$chunk_mib status=none
 	want=$(md5sum "$tmp/c" | cut -c1-32)
 	bytes=$(stat -c %s "$tmp/c")
+	if [ "$changed" = 1 ]; then
+		have=$(adb shell "dd if=$part bs=1048576 skip=$((i * chunk_mib)) count=$chunk_mib 2>/dev/null | head -c $bytes | md5sum" | cut -c1-32)
+		if [ "$have" = "$want" ]; then
+			echo "chunk $((i + 1))/$count unchanged"
+			i=$((i + 1))
+			continue
+		fi
+	fi
 	for attempt in 1 2 3; do
 		adb push "$tmp/c" /tmp/j5chunk >/dev/null
 		adb shell "dd if=/tmp/j5chunk of=$part bs=1048576 seek=$((i * chunk_mib)) conv=fsync 2>/dev/null; sync; echo 3 > /proc/sys/vm/drop_caches"

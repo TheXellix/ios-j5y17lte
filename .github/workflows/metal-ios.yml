@@ -106,12 +106,21 @@ jobs:
           sh userland/a5mali-metal/StockMetalPlugin/build_local.sh "$RUNNER_TEMP/out/plugin" \
             --mesa-build "$HOST_MESA"
 
+      - name: Shader compiler service package (T830)
+        run: |
+          set -eux
+          prof=$(find "$RUNNER_TEMP/m2v" -path '*validation/profiles/vk12-floor.json' | head -1)
+          python3 tools/j5-package-compiler.py \
+            "$RUNNER_TEMP/out/air/metal2vulkan-ios" "$RUNNER_TEMP/out/midgard/midgard" \
+            "$RUNNER_TEMP/out/midgard/midgard-generic602" "$RUNNER_TEMP/out/spirv-val" \
+            "$prof" "$RUNNER_TEMP/out/compiler"
+
       - name: Collect
         if: always()
         run: |
           set -x
           mkdir -p artifact
-          for d in air midgard plugin; do
+          for d in air midgard plugin compiler; do
             [ -d "$RUNNER_TEMP/out/$d" ] && rsync -a --exclude source --exclude cargo-target \
               --exclude src --exclude build "$RUNNER_TEMP/out/$d" artifact/ || true
           done
