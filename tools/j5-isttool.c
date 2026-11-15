@@ -8,6 +8,7 @@
  *   j5-isttool w REG VALUE                   write REG = VALUE
  *   j5-isttool p REG                         read S2MPU05 register (i2c-0, 0x66)
  *   j5-isttool P REG VALUE                   write S2MPU05 register
+ *   j5-isttool b BUS ADDR REG [N]            read N bytes at 8-bit REG on any bus
  *
  * Build: clang --target=aarch64-linux-gnu -nostdlib -static -ffreestanding
  *        -fno-stack-protector -O2 j5-isttool.c -o j5-isttool (ld.lld)
@@ -101,6 +102,25 @@ static int pmic(int write, u32 reg, u32 *val)
 	return 0;
 }
 
+static int busread(u32 bus, u32 addr, u32 reg, u32 n)
+{
+	char path[16] = "/dev/i2c-";
+	u8 a[1] = {reg}, b[32];
+	int bfd;
+	if (n == 0 || n > 32) n = 1;
+	if (bus >= 10) { path[9] = '0' + bus / 10; path[10] = '0' + bus % 10; path[11] = 0; }
+	else { path[9] = '0' + bus; path[10] = 0; }
+	bfd = (int)sys(56, -100, (long)path, 2, 0);
+	if (bfd < 0) { out("open failed\n"); return 1; }
+	struct i2c_msg r[2] = {{addr, 0, 1, a}, {addr, 1, n, b}};
+	struct i2c_rdwr d = {r, 2};
+	long rc = sys(29, bfd, I2C_RDWR, (long)&d, 0);
+	sys(57, bfd, 0, 0, 0);
+	if (rc != 2) { out("read error\n"); return 1; }
+	for (u32 i = 0; i < n; i++) { hex(reg + i); out(" = "); hex(b[i]); out("\n"); }
+	return 0;
+}
+
 static void sleep_ms(u32 ms)
 {
 	long ts[2] = {ms / 1000, (long)(ms % 1000) * 1000000};
@@ -109,6 +129,10 @@ static void sleep_ms(u32 ms)
 
 static int run(int argc, char **argv)
 {
+	if (argc >= 5 && argv[1][0] == 'b') {
+		return busread(parse_dec(argv[2]), parse(argv[3]), parse(argv[4]),
+		    argc > 5 ? parse_dec(argv[5]) : 1);
+	}
 	fd = (int)sys(56, -100, (long)"/dev/i2c-11", 2, 0);
 	if (fd < 0) { out("open /dev/i2c-11 failed\n"); return 1; }
 	if (argc >= 3 && argv[1][0] == 'r') {

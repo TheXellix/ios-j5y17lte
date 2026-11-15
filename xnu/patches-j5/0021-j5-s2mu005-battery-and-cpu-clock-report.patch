@@ -1,0 +1,501 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 540ccea..cf1cf0c 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -110,6 +110,7 @@ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+ bsd/dev/j5_touch.c			standard
+ bsd/dev/j5_gpu.c			standard
++bsd/dev/j5_battery.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+diff --git a/bsd/dev/j5_battery.c b/bsd/dev/j5_battery.c
+new file mode 100644
+index 0000000..3a385ca
+--- /dev/null
++++ b/bsd/dev/j5_battery.c
+@@ -0,0 +1,324 @@
++/*
++ * j5y17lte (SM-J530F, Exynos7870): S2MU005 fuel gauge and charger, read only.
++ *
++ * Hardware from the phone's rev07 DTB and the Samsung 3.18 kernel
++ * (drivers/battery_v2/s2mu005_fuelgauge.c, s2mu005_charger.c):
++ *   fuel gauge  I2C4 (s3c2440-i2c, 0x13830000), slave 0x3b, pins GPC4-0/1
++ *               function 2, PCLK gate CMU_PERI BUS0 bit 21 (I2C_FUELGAUGE)
++ *               RVBAT 0x04/0x05: mV = raw * 1000 >> 13
++ *               RCUR_CC 0x06/0x07: two's complement, mA = raw * 1000 >> 12,
++ *               negative value (bit 15) = charging
++ *               RSOC 0x08/0x09: 0.01 % = raw * 10000 >> 14
++ *   charger     I2C0 (s3c2440-i2c, 0x13870000), S2MU005 MFD slave 0x3d,
++ *               pins GPC1-0/1 function 2, gate BUS0 bit 17 (I2C_IFPMIC)
++ *               CHG_STATUS0 0x08: bit 7 VBUS_OK, bit 4 CHG_OK, [3:0] state
++ *               (2 pre, 3 cool, 4 CC, 5 CV, 6 done flag, 7 top-off, 8 done)
++ *
++ * Verified from TWRP: RVBAT 0x89a2 = 4301 mV (Linux voltage_now 4302000),
++ * RSOC 0x3e37 = 97.21 % raw = 100 % UI with capacity_max 950,
++ * CHG_STATUS0 0xa0 (USB present, charger idle because full).
++ *
++ * Only reads, never writes the gauge (Linux owns its calibration). The UI
++ * percentage follows sec_battery: raw 0.1 % * 1000 / capacity_max (950).
++ */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include <kern/cpu_number.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void delay(int usec);
++
++int j5_battery_init(void);
++int j5_battery_read(unsigned *percent, unsigned *mv, int *ma, bool *external,
++    bool *charging, bool *full);
++
++#define J5B_FG_I2C      0x13830000u
++#define J5B_CHG_I2C     0x13870000u
++#define J5B_PERI_CMU    0x101f0000u
++#define J5B_PINS_TOP    0x139b0000u     /* GPB0 +0x00, GPC0 +0x20, GPC1 +0x40, GPC4 +0x60 */
++#define J5B_FG_SLAVE    0x3bu
++#define J5B_CHG_SLAVE   0x3du
++#define J5B_CAPACITY_MAX 950u
++
++#define IICCON  0x00u
++#define IICSTAT 0x04u
++#define IICDS   0x0cu
++#define IICLC   0x10u
++
++static vm_offset_t j5b_fg, j5b_chg;
++static int j5b_state;           /* 0 untried, 1 ready, -1 failed */
++static unsigned j5b_errors;
++
++static uint32_t
++j5b_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++j5b_wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* Same s3c2440 sequences as bsd/dev/j5_touch.c (Linux i2c-s3c2410.c). */
++static bool
++j5b_wait(vm_offset_t i2c)
++{
++	for (unsigned n = 0; n < 20000; n++) {
++		if (j5b_rd(i2c, IICCON) & 0x10u) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
++}
++
++static void
++j5b_clear(vm_offset_t i2c)
++{
++	j5b_wr(i2c, IICCON, j5b_rd(i2c, IICCON) & ~0x10u);
++}
++
++static void
++j5b_stop(vm_offset_t i2c)
++{
++	j5b_wr(i2c, IICSTAT, j5b_rd(i2c, IICSTAT) & ~0x20u);
++	j5b_clear(i2c);
++	for (unsigned n = 0; n < 5000; n++) {
++		if (!(j5b_rd(i2c, IICSTAT) & 0x20u)) {
++			return;
++		}
++		delay(1);
++	}
++}
++
++static void
++j5b_setup(vm_offset_t i2c)
++{
++	j5b_wr(i2c, IICCON, 0xe3u);
++	j5b_wr(i2c, IICLC, 7u);
++	j5b_wr(i2c, IICSTAT, 0x10u);
++}
++
++static bool
++j5b_start(vm_offset_t i2c, uint32_t mode, uint8_t addr)
++{
++	uint32_t con = j5b_rd(i2c, IICCON) | 0x80u;
++	j5b_wr(i2c, IICSTAT, mode);
++	j5b_wr(i2c, IICDS, addr);
++	delay(1);
++	j5b_wr(i2c, IICCON, con);
++	j5b_wr(i2c, IICSTAT, mode | 0x20u);
++	j5b_clear(i2c);
++	if (!j5b_wait(i2c)) {
++		return false;
++	}
++	return !(j5b_rd(i2c, IICSTAT) & 1u);
++}
++
++/* 8-bit register address, repeated START, read count bytes. */
++static bool
++j5b_read(vm_offset_t i2c, uint8_t slave, uint8_t reg, uint8_t *out, unsigned count)
++{
++	for (unsigned n = 0; n < 5000 && (j5b_rd(i2c, IICSTAT) & 0x20u); n++) {
++		delay(1);
++	}
++	if (j5b_rd(i2c, IICSTAT) & 0x20u) {
++		j5b_stop(i2c);
++		j5b_setup(i2c);
++	}
++	if (!j5b_start(i2c, 0xd0u, (uint8_t)(slave << 1))) {
++		goto fail;
++	}
++	j5b_wr(i2c, IICDS, reg);
++	delay(1);
++	j5b_clear(i2c);
++	if (!j5b_wait(i2c) || (j5b_rd(i2c, IICSTAT) & 1u)) {
++		goto fail;
++	}
++	if (!j5b_start(i2c, 0x90u, (uint8_t)((slave << 1) | 1u))) {
++		goto fail;
++	}
++	for (unsigned i = 0; i < count; i++) {
++		if (i + 1 == count) {
++			j5b_wr(i2c, IICCON, j5b_rd(i2c, IICCON) & ~0x80u);   /* NACK last */
++		}
++		j5b_clear(i2c);
++		if (!j5b_wait(i2c)) {
++			goto fail;
++		}
++		out[i] = (uint8_t)j5b_rd(i2c, IICDS);
++	}
++	j5b_stop(i2c);
++	return true;
++fail:
++	j5b_stop(i2c);
++	return false;
++}
++
++static bool
++j5b_read_retry(vm_offset_t i2c, uint8_t slave, uint8_t reg, uint8_t *out, unsigned count)
++{
++	for (unsigned attempt = 0; attempt < 3; attempt++) {
++		if (j5b_read(i2c, slave, reg, out, count)) {
++			return true;
++		}
++		j5b_setup(i2c);
++		delay(1000);
++	}
++	j5b_errors++;
++	return false;
++}
++
++void j5_clock_report(void);
++
++int
++j5_battery_init(void)
++{
++	if (!j5b_state) {
++		j5_clock_report();
++	}
++	if (j5b_state) {
++		return j5b_state > 0 ? 0 : -1;
++	}
++	int enable = 1;
++	(void)PE_parse_boot_argn("j5battery", &enable, sizeof(enable));
++	if (!enable) {
++		j5b_state = -1;
++		return -1;
++	}
++	vm_offset_t peri = ml_io_map(J5B_PERI_CMU, 0x1000);
++	vm_offset_t pins = ml_io_map(J5B_PINS_TOP, 0x1000);
++	j5b_fg = ml_io_map(J5B_FG_I2C, 0x100);
++	j5b_chg = ml_io_map(J5B_CHG_I2C, 0x100);
++	if (!peri || !pins || !j5b_fg || !j5b_chg) {
++		printf("J5 BATTERY: MMIO mapping failed\n");
++		j5b_state = -1;
++		return -1;
++	}
++	printf("J5 BATTERY: PERI BUS0 gate %#x GPC1 con=%#x GPC4 con=%#x\n",
++	    j5b_rd(peri, 0x810), j5b_rd(pins, 0x40), j5b_rd(pins, 0x60));
++	j5b_wr(peri, 0x810, j5b_rd(peri, 0x810) | (1u << 21) | (1u << 17));
++	j5b_wr(pins, 0x40, (j5b_rd(pins, 0x40) & ~0xffu) | 0x22u);
++	j5b_wr(pins, 0x60, (j5b_rd(pins, 0x60) & ~0xffu) | 0x22u);
++	j5b_setup(j5b_fg);
++	j5b_setup(j5b_chg);
++
++	uint8_t st = 0, fg[2];
++	bool ok_fg = j5b_read_retry(j5b_fg, J5B_FG_SLAVE, 0x04, fg, 2);
++	bool ok_chg = j5b_read_retry(j5b_chg, J5B_CHG_SLAVE, 0x08, &st, 1);
++	printf("J5 BATTERY: probe fuelgauge=%d (rvbat %02x%02x) charger=%d (status0 %#x)\n",
++	    ok_fg, fg[1], fg[0], ok_chg, st);
++	j5b_state = ok_fg ? 1 : -1;
++	return ok_fg ? 0 : -1;
++}
++
++int
++j5_battery_read(unsigned *percent, unsigned *mv, int *ma, bool *external,
++    bool *charging, bool *full)
++{
++	uint8_t v[6], st = 0;
++	if (j5b_state <= 0 || !j5b_read_retry(j5b_fg, J5B_FG_SLAVE, 0x04, v, 6)) {
++		return -1;
++	}
++	unsigned raw_v = (unsigned)v[0] | ((unsigned)v[1] << 8);
++	unsigned raw_i = (unsigned)v[2] | ((unsigned)v[3] << 8);
++	unsigned raw_s = (unsigned)v[4] | ((unsigned)v[5] << 8);
++	*mv = (raw_v * 1000u) >> 13;
++
++	/* Linux sign: bit 15 = charging. IOPMPowerSource: positive = charging. */
++	if (raw_i & 0x8000u) {
++		*ma = (int)(((((~raw_i) & 0xffffu) + 1u) * 1000u) >> 12);
++	} else {
++		*ma = -(int)(((raw_i & 0x7fffu) * 1000u) >> 12);
++	}
++
++	int soc = 0;            /* 0.01 % */
++	if (!(raw_s & 0x8000u)) {
++		soc = (int)(((raw_s & 0x7fffu) * 10000u) >> 14);
++	}
++	unsigned ui = (unsigned)(soc / 10) * 1000u / J5B_CAPACITY_MAX;   /* 0.1 % */
++	ui = (ui + 5) / 10;
++	if (ui > 100) {
++		ui = 100;
++	}
++	if (ui == 0 && *mv > 3500) {
++		ui = 1;
++	}
++
++	bool have_chg = j5b_read_retry(j5b_chg, J5B_CHG_SLAVE, 0x08, &st, 1);
++	unsigned state = st & 0xfu;
++	*external = have_chg && (st & 0x80u);
++	*charging = *external && state >= 2 && state <= 5;
++	*full = *external && (state >= 6 || (state == 0 && ui >= 99));
++	if (*full) {
++		ui = 100;
++	}
++	*percent = ui;
++	return 0;
++}
++#endif /* ARM64_BOARD_CONFIG_A5XELTE */
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/*
++ * CPU clock report (read only). CMU_CPUCL0 0x10900000, CMU_CPUCL1 0x10800000
++ * (S5E7870-cmusfr.h): PLL_CON0 +0x100 (pll141xx: enable bit 31, M [25:16],
++ * P [13:8], S [2:0], FOUT = 26 MHz * M / (P << S)), MUX_CPUCLx_PLL +0x200,
++ * MUX_CLK_CPUCLx +0x208, DIV_CLK_CPUCLx_1 +0x400, _2 +0x404. The effective
++ * frequency comes from the A53 PMU cycle counter against the 26 MHz timer.
++ */
++#include <kern/clock.h>
++extern uint64_t mach_absolute_time(void);
++void j5_clock_report(void);
++
++static unsigned
++j5c_pll_mhz(uint32_t con0)
++{
++	unsigned m = (con0 >> 16) & 0x3ffu, p = (con0 >> 8) & 0x3fu, s = con0 & 7u;
++	if (!(con0 & (1u << 31)) || !p) {
++		return 0;
++	}
++	return (unsigned)((26ull * m) / ((uint64_t)p << s));
++}
++
++void
++j5_clock_report(void)
++{
++	static const uint32_t bases[2] = {0x10900000u, 0x10800000u};
++	for (unsigned c = 0; c < 2; c++) {
++		vm_offset_t cmu = ml_io_map(bases[c], 0x1000);
++		if (!cmu) {
++			continue;
++		}
++		uint32_t con0 = j5b_rd(cmu, 0x100);
++		printf("J5 CLOCK: CPUCL%u pll_con0=%#x (%u MHz) mux_pll=%#x mux_clk=%#x div1=%#x div2=%#x\n",
++		    c, con0, j5c_pll_mhz(con0), j5b_rd(cmu, 0x200), j5b_rd(cmu, 0x208),
++		    j5b_rd(cmu, 0x400), j5b_rd(cmu, 0x404));
++	}
++
++	uint64_t pmcr;
++	__asm__ volatile("mrs %0, PMCR_EL0" : "=r"(pmcr));
++	__asm__ volatile("msr PMCR_EL0, %0" :: "r"(pmcr | 1u));          /* E */
++	__asm__ volatile("msr PMCNTENSET_EL0, %0" :: "r"(1ull << 31));
++	__asm__ volatile("isb");
++	boolean_t istate = ml_set_interrupts_enabled(FALSE);
++	uint64_t c0, c1, t0 = mach_absolute_time(), t1;
++	__asm__ volatile("isb; mrs %0, PMCCNTR_EL0" : "=r"(c0));
++	do {
++		t1 = mach_absolute_time();
++	} while (t1 - t0 < 26000u * 20u);                      /* 20 ms at 26 MHz */
++	__asm__ volatile("isb; mrs %0, PMCCNTR_EL0" : "=r"(c1));
++	ml_set_interrupts_enabled(istate);
++	uint64_t ticks = t1 - t0, cycles = c1 - c0;
++	printf("J5 CLOCK: cpu%d measured %llu MHz (%llu cycles in %llu ticks, pmcr=%#llx)\n",
++	    cpu_number(), (cycles * 26ull) / (ticks ? ticks : 1), cycles, ticks, pmcr);
++}
++#endif
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 9969739..7d45b97 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -4,7 +4,7 @@
+  * SOC is an UNCALIBRATED estimate, not a replacement for the Linux QG algo.
+  * See report.md for binary evidence, register provenance and integration.
+  */
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ #include <device/device_types.h> /* io_buf_ptr_t for private OSKext headers */
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOWorkLoop.h>
+@@ -12,9 +12,20 @@
+ #include <IOKit/pwr_mgt/IOPMPowerSource.h>
+ #include <libkern/c++/OSCollectionIterator.h>
+ #include <pexpert/pexpert.h>
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/* bsd/dev/j5_battery.c: S2MU005 fuel gauge + charger (j5y17lte). */
++extern "C" int j5_battery_init(void);
++extern "C" int j5_battery_read(unsigned *percent, unsigned *mv, int *ma,
++    bool *external, bool *charging, bool *full);
++#define SWEET_BATTERY_MAH 3000u   /* SDI 3000 mAh, DT capacity_full 0xbb8 */
++#define SWEET_BATTERY_SOURCE "S2MU005 fuel gauge"
++#else
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++#define SWEET_BATTERY_MAH 5020u
++#define SWEET_BATTERY_SOURCE "PM6150 / estimated SOC"
++#endif
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -102,10 +113,10 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+     bool capable, bool charging, bool full, bool measured, bool currentValid)
+ {
+ 	/* Use consistent mAh units (DT nominal=5020). powerd computes C*100/M. */
+-	const unsigned capacity = (5020u * percent + 50u) / 100u;
++	const unsigned capacity = (SWEET_BATTERY_MAH * percent + 50u) / 100u;
+ 	setBatteryInstalled(true);
+ 	setCurrentCapacity(capacity);
+-	setMaxCapacity(5020);
++	setMaxCapacity(SWEET_BATTERY_MAH);
+ 	setExternalConnected(external);
+ 	setExternalChargeCapable(capable);
+ 	setIsCharging(charging);
+@@ -119,8 +130,8 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	putBool("FullyCharged", full);
+ 	putBool("AppleRawExternalConnected", external);
+ 	putNumber("AppleRawCurrentCapacity", capacity);
+-	putNumber("AppleRawMaxCapacity", 5020);
+-	putNumber("DesignCapacity", 5020);
++	putNumber("AppleRawMaxCapacity", SWEET_BATTERY_MAH);
++	putNumber("DesignCapacity", SWEET_BATTERY_MAH);
+ 	putNumber("InstantAmperage", (UInt32)ma);
+ 	/* iOS battery convention: centidegrees C; fixed 25 C, NOT measured. */
+ 	putNumber("Temperature", 2500);
+@@ -137,7 +148,7 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 		const char *keys[] = {kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey,
+ 		    kIOBatteryVoltageKey, kIOBatteryAmperageKey, kIOBatteryCycleCountKey,
+ 		    kIOBatteryFlagsKey};
+-		UInt32 values[] = {capacity, 5020, mv, (UInt32)ma, 0,
++		UInt32 values[] = {capacity, SWEET_BATTERY_MAH, mv, (UInt32)ma, 0,
+ 		    (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
+ 		    (charging ? kIOBatteryCharge : 0))};
+ 		for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+@@ -154,7 +165,7 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	int mode = measured ? 1 : 0;
+ 	if (mode != fLastMode) {
+ 		IOLog("SWEET BATTERY: %s, %u%% %umV external=%d charging=%d\n",
+-		    measured ? "PM6150 / estimated SOC" : "static fallback",
++		    measured ? SWEET_BATTERY_SOURCE : "static fallback",
+ 		    percent, mv, external, charging);
+ 		fLastMode = mode;
+ 	}
+@@ -163,6 +174,36 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ /* Keep the proven single-byte observer command. Read two matching whole
+  * words to reject most torn ADC samples without writing the QG HOLD bit.
+  * This is a bounded consistency check, not a hardware snapshot guarantee. */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++bool
++SweetBattery::readWord(unsigned, uint16_t *)
++{
++	return false;
++}
++
++void
++SweetBattery::poll(void)
++{
++	unsigned percent = 0, mv = 0;
++	int ma = 0;
++	bool external = false, charging = false, full = false;
++	if (!fReal || j5_battery_read(&percent, &mv, &ma, &external, &charging, &full) ||
++	    mv < 2800 || mv > 4600) {
++		publish(100, 4200, 0, true, true, false, true, false, false);
++		return;
++	}
++	publish(percent, mv, ma, external, external, charging, full, true, true);
++	static unsigned lastPercent = 1000;
++	static bool lastExternal, lastCharging;
++	if (percent != lastPercent || external != lastExternal || charging != lastCharging) {
++		IOLog("J5 BATTERY: %u%% %umV %dmA external=%d charging=%d full=%d\n",
++		    percent, mv, ma, external, charging, full);
++		lastPercent = percent;
++		lastExternal = external;
++		lastCharging = charging;
++	}
++}
++#else
+ bool
+ SweetBattery::readWord(unsigned address, uint16_t *value)
+ {
+@@ -245,6 +286,7 @@ SweetBattery::poll(void)
+ 	publish(full ? 100 : estimatePercent(mv), mv, ma, external, capable,
+ 	    charging, full, true, currentValid);
+ }
++#endif /* !ARM64_BOARD_CONFIG_A5XELTE */
+ 
+ void
+ SweetBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
+@@ -262,9 +304,13 @@ SweetBattery::start(IOService *provider)
+ 	if (!IOPMPowerSource::start(provider)) {
+ 		return false;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	fReal = j5_battery_init() == 0;
++#else
+ 	int real = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
++#endif
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+ 	if (fReal) {
+@@ -316,4 +362,4 @@ SweetBattery::free(void)
+ 	OSSafeReleaseNULL(fLoop);
+ 	IOPMPowerSource::free();
+ }
+-#endif /* ARM64_BOARD_CONFIG_SWEET */
++#endif /* ARM64_BOARD_CONFIG_SWEET || ARM64_BOARD_CONFIG_A5XELTE */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 2c3af25..affb336 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -89,13 +89,11 @@ const char * gIOKernelConfigTables =
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetHIDTouch;"
+     "   },"
+-#if !defined(ARM64_BOARD_CONFIG_A5XELTE)
+     "   {"
+     "     'IOClass'         = SweetBattery;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetBattery;"
+     "   },"
+-#endif
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+     "   {"
+     "     'IOClass'         = A5XELTEGPU;"
