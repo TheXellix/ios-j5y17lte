@@ -88,8 +88,8 @@ jobs:
             files('a5_t720_copy_shader.c'),
             c_args : [c_msvc_compat_args, no_override_init_args, compile_args_panfrost],
             include_directories : [inc_include, inc_src, inc_panfrost],
-            dependencies : [idep_nir, idep_mesautil, libpanfrost_dep],
-            link_with : [libpanfrost_compiler],
+            dependencies : [idep_nir, idep_mesautil, idep_pan_packers],
+            link_with : [libpanfrost_compiler, libpanfrost_midgard_disasm],
             build_by_default : false,
           )
           ''')
