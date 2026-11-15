@@ -144,3 +144,17 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   All A5 private GPU stages 3-7 now pass on the J5 Mali-T830. Next: the iOS
   Metal path (a5mali-metal plugin, on-device shader compiler, native queue)
   still emits T720 v4 descriptors and must move to v5.
+- 2026-11-15 boot 24 (run20 kernel, cpus=8): same panic as the A5 —
+  "Ticket lock 0xfffffff007b8c880 is unexpectedly owned" (pset0 + 0x100,
+  the pset0 scheduler lock) on CPU 1 while CPU 2 came online, with two SMP
+  psets (cluster 1 = MPIDR 0x10x). Patch 0022 merges both A53 clusters into
+  logical cluster 0, as the Sweet port does (j5clusters=2 restores two).
+- S2MU005 read from TWRP (i2c-12 0x3b, i2c-9 0x3d): RVBAT 0x89a2 = 4301 mV,
+  RSOC 0x3e37 = 97.2 % raw (100 % UI, capacity_max 950), RCUR_CC 0x007f =
+  -31 mA, CHG_STATUS0 0xa0 (VBUS ok, idle/full). Patch 0021 feeds these to
+  SweetBattery (IOPMPowerSource, 3000 mAh).
+- CPU DVFS table of this chip, measured in TWRP (BUCK1 is shared by both
+  clusters): 546 MHz 625.0 mV, 676 668.75, 757 693.75, 839 712.5,
+  902 737.5, 1014 781.25, 1144 825.0, 1248 868.75, 1352 906.25,
+  1482 956.25, 1586 1006.25 mV. S2MPU05 BUCK1: CTRL1 0x1a, OUT 0x1b,
+  V = 400 mV + 6.25 mV * code.
