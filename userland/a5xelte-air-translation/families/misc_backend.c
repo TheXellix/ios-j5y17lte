@@ -368,7 +368,7 @@ static int compile(const char *input,const char *output,mesa_shader_stage stage,
    if(dynamic && stage==MESA_SHADER_FRAGMENT && !a5_fragcoord_layout(nir,&fragcoord)){
       ralloc_free(nir);return 2;
    }
-   struct pan_compile_inputs inputs={.gpu_id=0x07201000,.is_blit=true,.no_idvs=true};
+   struct pan_compile_inputs inputs={.gpu_id=0x08300010 /* j5y17lte Mali-T830 r0p1 */,.is_blit=true,.no_idvs=true};
    struct pan_shader_info info={0};struct util_dynarray binary=UTIL_DYNARRAY_INIT;
    nir_shader_gather_info(nir,nir_shader_get_entrypoint(nir));
    struct pan_varying_layout varyings;

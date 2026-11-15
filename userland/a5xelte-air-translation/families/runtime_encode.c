@@ -2,11 +2,11 @@
  * Runtime emitter using released Mesa26.2.4 v4 packing. No fixture includes.
  * pan_blend.c supplies source-over; pan_tiler.c supplies flat-list sizing.
  */
-#define PAN_ARCH 4
+#define PAN_ARCH 5
 #include "runtime_encode.h"
 #include <string.h>
 #include <math.h>
-#include "genxml/v4_pack.h"
+#include "runtime_fb_v5.h"
 #include "runtime_preload.h"
 
 enum { FB=0x300,VRS=0x500,FRS=0x540,TEX=0x600,TT=0x660,SAMP=0x680,
@@ -18,7 +18,8 @@ enum { FB=0x300,VRS=0x500,FRS=0x540,TEX=0x600,TT=0x660,SAMP=0x680,
  INDEX=0x3a000,INDEX_END=A5RuntimeJobBytes,
  RG=MALI_CHANNEL_R|(MALI_CHANNEL_G<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_1<<9),
  R=MALI_CHANNEL_R|(MALI_CHANNEL_0<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_1<<9) };
-_Static_assert(MALI_ATTRIBUTE_BUFFER_LENGTH==16,"released v4 table stride");
+_Static_assert(MALI_ATTRIBUTE_BUFFER_LENGTH==16,"released table stride");
+_Static_assert(FRS+MALI_RENDERER_STATE_LENGTH+MALI_BLEND_LENGTH<=TEX,"v5 BLEND after the fragment RSD");
 static void put32(uint8_t*d,unsigned o,uint32_t x){memcpy(d+o,&x,4);}
 static void put64(uint8_t*d,unsigned o,uint64_t x){memcpy(d+o,&x,8);}
 static int span(uint64_t a,uint64_t n){return a&&n&&a<(UINT64_C(1)<<40)&&n<=(UINT64_C(1)<<40)-a;}
@@ -220,30 +221,23 @@ static int encode(const A5RuntimeDraw*r,uint8_t*d){
   c.mipmap_mode=MALI_MIPMAP_MODE_NEAREST;c.minimum_lod=0;c.maximum_lod=0;
  }
  put32(d,FPUSH,1);put32(d,FPUSH+4,r->source.width);put32(d,FPUSH+8,r->source.height);
- pan_section_pack(d+FB,FRAMEBUFFER,LOCAL_STORAGE,c){
-  c.tls_size=fs->tlsBytes==64?2:fs->tlsBytes==32?1:0;
-  c.tls_base_pointer=fs->tlsBytes?va+TLS:0;c.wls_instances=MALI_LOCAL_STORAGE_NO_WORKGROUP_MEM;
- }
  unsigned raw=r->destination.metalPixelFormat==115;
- pan_section_pack(d+FB,FRAMEBUFFER,PARAMETERS,c){
-  c.internal_format=raw?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
-  c.color_writeback_format=raw?MALI_COLOR_FORMAT_2_32B_CHANNELS:MALI_COLOR_FORMAT_R8G8B8A8;
-  c.swizzle=raw?0x688:0x60a;c.color_write_enable=true;
-  c.color_block_format=MALI_BLOCK_FORMAT_LINEAR;c.tie_break_rule=MALI_TIE_BREAK_RULE_MINUS_180_IN_0_OUT;
-  c.bound_max_x=r->destination.width-1;c.bound_max_y=r->destination.height-1;
-  c.color_writeback.base=r->destination.gpuVA;c.color_writeback.row_stride=r->destination.rowBytes;
-
- }
  /* The already device-verified T720 flat tile encoding0x1c7 selects1024x1024
   * bins. Unlike a hardcoded32x32 fixture, size both lists from actual FB dimensions
   * using released pan_tiler.c pan_flat_size (no hierarchy on T720). */
  unsigned tiles=((r->destination.width+1023)/1024)*((r->destination.height+1023)/1024);
  unsigned header=0x200+((tiles*8)/0x200)*0x200,full=0x200+tiles*0x200;
  if(header+full>POLY_END-POLY)return A5RuntimeBounds;
- pan_section_pack(d+FB,FRAMEBUFFER,TILER,c){
-  c.polygon_list=va+POLY;c.polygon_list_body=va+POLY+header;c.polygon_list_size=full;
-  c.hierarchy_mask=0x1c7;c.heap_start=va+HEAP;c.heap_end=va+HEAP_END;
- }
+ A5FbV5 f={.width=r->destination.width,.height=r->destination.height,
+  .bound_max_x=r->destination.width-1,.bound_max_y=r->destination.height-1,
+  .internal_format=raw?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8,
+  .writeback_format=raw?A5_CF_2x32:MALI_COLOR_FORMAT_R8G8B8A8,.swizzle=raw?0x688:0x60a,
+  .base=r->destination.gpuVA,.row_stride=r->destination.rowBytes,
+  .surface_stride=r->destination.rowBytes*r->destination.height,.dither=false,
+  .tls_size=fs->tlsBytes==64?2:fs->tlsBytes==32?1:0,.tls_base=fs->tlsBytes?va+TLS:0,
+  .hierarchy_mask=0x1c7,.polygon_list_size=full,.polygon_list=va+POLY,.polygon_list_body=va+POLY+header,
+  .heap_start=va+HEAP,.heap_end=va+HEAP_END};
+ a5_pack_fb_v5(d+FB,&f);
  put32(d,POLY+header,0xa0000000);
  pan_pack((struct mali_renderer_state_packed*)(d+VRS),RENDERER_STATE,c){
   c.shader.shader=va+VCODE+vs->firstTag;c.shader.attribute_count=2;c.shader.varying_count=3;
@@ -253,15 +247,15 @@ static int encode(const A5RuntimeDraw*r,uint8_t*d){
  pan_pack((struct mali_renderer_state_packed*)(d+FRS),RENDERER_STATE,c){
   c.shader.shader=va+FCODE+fs->firstTag;c.shader.texture_count=1;c.shader.sampler_count=1;c.shader.varying_count=1;
   c.properties.uniform_buffer_count=5;c.properties.work_register_count=fs->workRegisters;c.properties.force_early_z=true;
-  c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;c.multisample_misc.load_destination=!!r->blend;
-  c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;c.stencil_mask_misc.write_enable=true;c.stencil_mask_misc.dither_disable=true;
-  c.blend_equation.rgb.a=MALI_BLEND_OPERAND_A_SRC;c.blend_equation.alpha.a=MALI_BLEND_OPERAND_A_SRC;
-  c.blend_equation.rgb.b=r->blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;
-  c.blend_equation.alpha.b=c.blend_equation.rgb.b;
-  c.blend_equation.rgb.c=r->blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;
-  c.blend_equation.alpha.c=c.blend_equation.rgb.c;c.blend_equation.rgb.invert_c=!!r->blend;
-  c.blend_equation.alpha.invert_c=!!r->blend;c.blend_equation.color_mask=15;
+  c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;
+  c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;
  }
+ {struct MALI_BLEND_EQUATION e={0};
+  e.rgb.a=MALI_BLEND_OPERAND_A_SRC;e.alpha.a=MALI_BLEND_OPERAND_A_SRC;
+  e.rgb.b=r->blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;e.alpha.b=e.rgb.b;
+  e.rgb.c=r->blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;e.alpha.c=e.rgb.c;
+  e.rgb.invert_c=!!r->blend;e.alpha.invert_c=!!r->blend;e.color_mask=15;
+  a5_pack_blend_v5(d+FRS+MALI_RENDERER_STATE_LENGTH,true,!!r->blend,&e);}
  attr(d,ATTR,0,position2?MALI_RG32F:MALI_RGBA32F,position2?RG:0x688,vertexLow);attr(d,ATTR+8,0,MALI_RG32F,RG,vertexLow+16);
  ab(d,ABUF,vertexBase,48,r->vertexCount*48+vertexLow);
  attr(d,VV,0,MALI_SNAP_4,0x688,0);attr(d,VV+8,1,MALI_R16F,R,0);attr(d,VV+16,2,MALI_RG32UI,RG,0);
@@ -270,17 +264,17 @@ static int encode(const A5RuntimeDraw*r,uint8_t*d){
  pan_pack((struct mali_job_header_packed*)d,JOB_HEADER,c){c.type=MALI_JOB_TYPE_VERTEX;c.index=1;c.next=va+0x100;}
  pan_pack((struct mali_invocation_packed*)(d+32),INVOCATION,c){c.invocations=r->vertexCount-1;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_compute_job_parameters_packed*)(d+MALI_COMPUTE_JOB_SECTION_PARAMETERS_OFFSET),COMPUTE_JOB_PARAMETERS,c){c.job_task_split=5;}
- pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ABUF;c.uniform_buffers=va+VUBO;c.varyings=va+VV;c.varying_buffers=va+VB;c.thread_storage=va+FB;}
+ pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ABUF;c.uniform_buffers=va+VUBO;c.varyings=va+VV;c.varying_buffers=va+VB;c.thread_storage=a5_fbd_ptr_v5(va+FB);}
  pan_pack((struct mali_job_header_packed*)(d+0x100),JOB_HEADER,c){c.type=MALI_JOB_TYPE_TILER;c.index=2;c.dependency_1=1;c.enable_texture_mapper=true;}
  pan_pack((struct mali_invocation_packed*)(d+0x120),INVOCATION,c){c.invocations=r->vertexCount-1;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_primitive_packed*)(d+0x128),PRIMITIVE,c){c.draw_mode=r->primitive==A5RuntimeTriangle?MALI_DRAW_MODE_TRIANGLES:MALI_DRAW_MODE_TRIANGLE_STRIP;c.index_count=r->indexCount?r->indexCount:r->vertexCount;
   c.index_type=r->indexCount?(r->indexSize==2?MALI_INDEX_TYPE_UINT16:MALI_INDEX_TYPE_UINT32):MALI_INDEX_TYPE_NONE;
   c.indices=indexVA;c.job_task_split=6;}
- pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=va+POS;c.viewport=va+VP;c.varyings=va+FV;c.varying_buffers=va+FVB;c.uniform_buffers=va+FUBO;c.textures=va+TT;c.samplers=va+SAMP;c.state=va+FRS;c.fbd=va+FB;}
+ pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=va+POS;c.viewport=va+VP;c.varyings=va+FV;c.varying_buffers=va+FVB;c.uniform_buffers=va+FUBO;c.textures=va+TT;c.samplers=va+SAMP;c.state=va+FRS;c.fbd=a5_fbd_ptr_v5(va+FB);}
  pan_pack((struct mali_primitive_size_packed*)(d+0x1b8),PRIMITIVE_SIZE,c){c.fixed_sized=1;}
  pan_pack((struct mali_viewport_packed*)(d+VP),VIEWPORT,c){c.scissor_minimum_x=r->scissorX;c.scissor_minimum_y=r->scissorY;c.scissor_maximum_x=r->scissorX+r->scissorWidth-1;c.scissor_maximum_y=r->scissorY+r->scissorHeight-1;}
  pan_pack((struct mali_job_header_packed*)(d+0x200),JOB_HEADER,c){c.type=MALI_JOB_TYPE_FRAGMENT;c.index=3;c.enable_texture_mapper=true;}
- pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=va+FB;}
+ pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=a5_fbd_ptr_v5(va+FB);}
  return a5_runtime_preload(d,va,&r->destination);
 }
 int A5MaliEncodeRuntimeDraw(const A5RuntimeDraw*r,void*out,size_t n){

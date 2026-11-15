@@ -302,7 +302,7 @@ static int compile_spirv(const char *input, const char *output,
    NIR_PASS(_, nir, nir_opt_constant_folding);
 
    struct pan_compile_inputs inputs = {
-      .gpu_id = 0x07201000,
+      .gpu_id = 0x08300010 /* j5y17lte Mali-T830 r0p1 */,
       .is_blit = true,
       .no_idvs = true,
    };

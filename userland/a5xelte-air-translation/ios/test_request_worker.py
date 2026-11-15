@@ -109,7 +109,7 @@ def main():
     uid_dir.mkdir(mode=0o700)
     known = json.loads(a.known.read_text())
     base = {'schema': 1, 'kind': 'function', 'source_library': 'quartzcore',
-            'metallib_sha256': known['metallib_sha256'], 'gpu_id': '07201000',
+            'metallib_sha256': known['metallib_sha256'], 'gpu_id': '08300010',
             'compiler_abi': 1}
     if known['profile_id'] == 602:
         if a.vertex_capture is None:

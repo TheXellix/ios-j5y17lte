@@ -61,7 +61,7 @@ def main():
             return
         receipt = {'schema': 2, 'kind': 'dynamic-stage', 'request_id': key,
             'source_library': 'quartzcore', 'metallib_sha256': obj['metallib_sha256'],
-            'gpu_id': '07201000', 'compiler_abi': 1, 'stage': obj['stage'],
+            'gpu_id': '08300010', 'compiler_abi': 1, 'stage': obj['stage'],
             'function': obj['function'], 'stage_compiled': False,
             'pipeline_compatible': False, 'support_generation': generation,
             'named_constants_sha256': digest(obj['named_constants']),

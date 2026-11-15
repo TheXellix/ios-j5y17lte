@@ -226,7 +226,7 @@ A5MaliShaderCompiledCacheEntry *A5MaliLoadShaderCompiledCache(NSString *requestI
     NSDictionary *receipt=decoded;
     if(!exactNumber(receipt[@"schema"],1)||![receipt[@"request_id"] isEqual:requestID]||
         !exactNumber(receipt[@"profile_id"],contract->profileID)||![receipt[@"source_library"] isEqual:@"quartzcore"]||
-        ![receipt[@"metallib_sha256"] isEqual:librarySHA]||![receipt[@"gpu_id"] isEqual:@"07201000"]||
+        ![receipt[@"metallib_sha256"] isEqual:librarySHA]||![receipt[@"gpu_id"] isEqual:@"08300010"]||
         !exactNumber(receipt[@"compiler_abi"],1)||![receipt[@"recipe"] isEqual:[NSString stringWithUTF8String:contract->recipe]]||
         !exactBool(receipt[@"stage_compiled"],YES)||!exactBool(receipt[@"pipeline_compatible"],NO)||
         !hexDigest(receipt[@"descriptor_sha256"])||

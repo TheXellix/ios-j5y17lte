@@ -54,7 +54,7 @@ def main():
     capture = json.loads(a.capture.read_text())
     known = json.loads((tools / 'generic603.json').read_text())
     body = {'schema': 1, 'kind': 'function', 'source_library': 'quartzcore',
-        'metallib_sha256': known['metallib_sha256'], 'gpu_id': '07201000',
+        'metallib_sha256': known['metallib_sha256'], 'gpu_id': '08300010',
         'compiler_abi': 1, 'owner_uid': uid, 'stage': 'fragment',
         'function': capture['function'], 'indexed_constants': [],
         'named_constants': [{'name': name, 'type': value['type'],
@@ -70,7 +70,7 @@ def main():
         reason = 'compiler/validator failed; see /private/var/db/a5shader-cache/.stage-work-previous/air.log'
         receipt = {'schema': 2, 'kind': 'dynamic-stage', 'request_id': key,
             'source_library': 'quartzcore', 'metallib_sha256': obj['metallib_sha256'],
-            'gpu_id': '07201000', 'compiler_abi': 1, 'stage': 'fragment',
+            'gpu_id': '08300010', 'compiler_abi': 1, 'stage': 'fragment',
             'function': obj['function'], 'stage_compiled': False,
             'pipeline_compatible': False,
             'named_constants_sha256': digest(obj['named_constants']),

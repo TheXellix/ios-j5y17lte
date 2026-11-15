@@ -56,8 +56,8 @@ static void positive(unsigned inputs,bool keep_color)
    nir_validate_shader(b.shader,"noncolliding FragCoord input");
    assert(position_base(b.shader)==inputs);
    struct pan_varying_layout varyings;
-   pan_varying_collect_formats(&varyings,b.shader,0x07201000,false,false);
-   pan_build_varying_layout_compact(&varyings,b.shader,0x07201000);
+   pan_varying_collect_formats(&varyings,b.shader,0x08300010 /* j5y17lte Mali-T830 r0p1 */,false,false);
+   pan_build_varying_layout_compact(&varyings,b.shader,0x08300010 /* j5y17lte Mali-T830 r0p1 */);
    assert(varyings.slots[inputs].location==VARYING_SLOT_POS);
    assert(varyings.slots[inputs].section==PAN_VARYING_SECTION_SPECIAL);
    ralloc_free(b.shader);
@@ -81,7 +81,7 @@ static void derivative(nir_intrinsic_op op,unsigned bits,struct util_dynarray *b
    assert(!ctx.invalid);
    nir_validate_shader(b.shader,"released Midgard derivative spelling");
    nir_shader_gather_info(b.shader,nir_shader_get_entrypoint(b.shader));
-   struct pan_compile_inputs inputs={.gpu_id=0x07201000,.is_blit=true,.no_idvs=true};
+   struct pan_compile_inputs inputs={.gpu_id=0x08300010 /* j5y17lte Mali-T830 r0p1 */,.is_blit=true,.no_idvs=true};
    struct pan_shader_info native={0};
    pan_preprocess_nir(b.shader,inputs.gpu_id);
    pan_postprocess_nir(b.shader,&inputs,&native);
@@ -104,7 +104,7 @@ int main(void)
          nir_metadata_control_flow,&old);
       NIR_PASS(_,b.shader,nir_opt_dce);
       struct pan_varying_layout varyings;
-      pan_varying_collect_formats(&varyings,b.shader,0x07201000,false,false);
+      pan_varying_collect_formats(&varyings,b.shader,0x08300010 /* j5y17lte Mali-T830 r0p1 */,false,false);
       _exit(99);
    }
    int status;assert(waitpid(child,&status,0)==child);

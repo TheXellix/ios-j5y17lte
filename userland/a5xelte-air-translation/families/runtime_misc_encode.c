@@ -2,14 +2,14 @@
  * Real dynamic misc-pass emitter. Code/constants are supplied by authenticated
  * profiles; vertices, uniforms, storage buffers and images are actual bindings.
  */
-#define PAN_ARCH 4
+#define PAN_ARCH 5
 #include <stdint.h>
 #include "runtime_misc_encode.h"
 #include "../../a5mali-metal/A5MaliRenderState.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include "genxml/v4_pack.h"
+#include "runtime_fb_v5.h"
 #include "runtime_preload.h"
 
 enum { SIZE=0x40000, W=32,H=32, FB=0x300,VS_RSD=0x500,FS_RSD=0x540,
@@ -64,26 +64,18 @@ static void buf(uint8_t*d,unsigned at,uint64_t address,unsigned stride,unsigned 
  }
 }
 static void framebuffer(uint8_t*d,uint64_t VA,unsigned format,const A5RuntimeImage*out){
- u32(d,FB+4,31); /* released v4 local storage, TLS/WLS bothzero */
- pan_section_pack(d+FB,FRAMEBUFFER,PARAMETERS,c){
-  c.internal_format=format==2?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:
-     format==4?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R5G5B5A1:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
-  c.swizzle=format==0||format==4?0x60a:0x688;
-  c.color_writeback_format=format==2?MALI_COLOR_FORMAT_2_32B_CHANNELS:
+ /* j5y17lte T830: v5 MFBD + render target (runtime_fb_v5.h); TLS/WLS zero. */
+ A5FbV5 f={.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
+  .internal_format=format==2?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:
+     format==4?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R5G5B5A1:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8,
+  .swizzle=format==0||format==4?0x60a:0x688,
+  .writeback_format=format==2?A5_CF_2x32:
      format==1?MALI_COLOR_FORMAT_R8:format==3?MALI_COLOR_FORMAT_R8G8:
-     format==4?MALI_COLOR_FORMAT_R5G5B5A1:MALI_COLOR_FORMAT_R8G8B8A8;
-  c.color_block_format=MALI_BLOCK_FORMAT_LINEAR;
-  c.color_write_enable=true;
-  c.tie_break_rule=MALI_TIE_BREAK_RULE_MINUS_180_IN_0_OUT;
-  c.bound_max_x=out->width-1;c.bound_max_y=out->height-1;
-  c.color_writeback.base=out->gpuVA;c.color_writeback.row_stride=out->rowBytes;
-
- }
- pan_section_pack(d+FB,FRAMEBUFFER,TILER,c){
-  c.polygon_list=VA+POLY;c.polygon_list_body=VA+POLY_BODY;
-  c.heap_start=VA+HEAP;c.heap_end=VA+HEAP+HEAP_SIZE;
-  c.polygon_list_size=0x200+0x200*((out->width+1023)/1024)*((out->height+1023)/1024);c.hierarchy_mask=0x1c7;
- }
+     format==4?MALI_COLOR_FORMAT_R5G5B5A1:MALI_COLOR_FORMAT_R8G8B8A8,
+  .base=out->gpuVA,.row_stride=out->rowBytes,.surface_stride=out->rowBytes*out->height,.dither=false,
+  .polygon_list=VA+POLY,.polygon_list_body=VA+POLY_BODY,.heap_start=VA+HEAP,.heap_end=VA+HEAP+HEAP_SIZE,
+  .polygon_list_size=0x200+0x200*((out->width+1023)/1024)*((out->height+1023)/1024),.hierarchy_mask=0x1c7};
+ a5_pack_fb_v5(d+FB,&f);
  u32(d,POLY_BODY,0xa0000000);
 }
 static void renderer(uint8_t*d,uint64_t VA,int home,int clear,int generic_color,int generic_textured,int textured_color,unsigned vs_regs,unsigned fs_regs,unsigned blend){
@@ -101,16 +93,17 @@ static void renderer(uint8_t*d,uint64_t VA,int home,int clear,int generic_color,
   c.properties.force_early_z=true;c.multisample_misc.sample_mask=0xffff;
   c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;
   c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;
-  c.stencil_mask_misc.write_enable=true;c.stencil_mask_misc.dither_disable=true;
-  c.multisample_misc.load_destination=!!blend;
-  c.blend_equation.rgb.a=MALI_BLEND_OPERAND_A_SRC;
-  c.blend_equation.rgb.b=blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;
-  c.blend_equation.rgb.c=blend==A5RuntimeBlendScreen?MALI_BLEND_OPERAND_C_SRC:blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;c.blend_equation.rgb.invert_c=!!blend;
-  c.blend_equation.alpha.a=MALI_BLEND_OPERAND_A_SRC;
-  c.blend_equation.alpha.b=blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;
-  c.blend_equation.alpha.c=blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;c.blend_equation.alpha.invert_c=!!blend;
-  c.blend_equation.color_mask=0xf;
  }
+ /* v5: fixed-function blend in the BLEND descriptor after the RSD. */
+ struct MALI_BLEND_EQUATION e={0};
+ e.rgb.a=MALI_BLEND_OPERAND_A_SRC;
+ e.rgb.b=blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;
+ e.rgb.c=blend==A5RuntimeBlendScreen?MALI_BLEND_OPERAND_C_SRC:blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;e.rgb.invert_c=!!blend;
+ e.alpha.a=MALI_BLEND_OPERAND_A_SRC;
+ e.alpha.b=blend?MALI_BLEND_OPERAND_B_DEST:MALI_BLEND_OPERAND_B_SRC;
+ e.alpha.c=blend?MALI_BLEND_OPERAND_C_SRC_ALPHA:MALI_BLEND_OPERAND_C_ZERO;e.alpha.invert_c=!!blend;
+ e.color_mask=0xf;
+ a5_pack_blend_v5(d+FS_RSD+MALI_RENDERER_STATE_LENGTH,true,!!blend,&e);
 }
 static int span(uint64_t a,uint64_t n){return a&&n&&a<(UINT64_C(1)<<40)&&n<=(UINT64_C(1)<<40)-a;}
 static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m){return a<b+m&&b<a+n;}
@@ -770,7 +763,7 @@ static void jobs(uint8_t*d,uint64_t VA,const A5RuntimeDraw*r,uint64_t indexVA){
  pan_pack((struct mali_job_header_packed*)d,JOB_HEADER,c){c.type=MALI_JOB_TYPE_VERTEX;c.index=1;c.next=VA+0x100;}
  pan_pack((struct mali_invocation_packed*)(d+32),INVOCATION,c){c.invocations=r->vertexCount-1;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_compute_job_parameters_packed*)(d+MALI_COMPUTE_JOB_SECTION_PARAMETERS_OFFSET),COMPUTE_JOB_PARAMETERS,c){c.job_task_split=5;}
- pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=VA+VS_RSD;c.attributes=VA+ATTRS;c.attribute_buffers=VA+ATTR_BUFS;c.uniform_buffers=VA+VS_UBOS;c.varyings=VA+VS_VARY;c.varying_buffers=VA+VS_VARY_BUFS;c.thread_storage=VA+FB;}
+ pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=VA+VS_RSD;c.attributes=VA+ATTRS;c.attribute_buffers=VA+ATTR_BUFS;c.uniform_buffers=VA+VS_UBOS;c.varyings=VA+VS_VARY;c.varying_buffers=VA+VS_VARY_BUFS;c.thread_storage=a5_fbd_ptr_v5(VA+FB);}
  pan_pack((struct mali_job_header_packed*)(d+0x100),JOB_HEADER,c){c.type=MALI_JOB_TYPE_TILER;c.index=2;c.dependency_1=1;c.enable_texture_mapper=true;}
  pan_pack((struct mali_invocation_packed*)(d+0x120),INVOCATION,c){c.invocations=r->vertexCount-1;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_primitive_packed*)(d+0x128),PRIMITIVE,c){
@@ -783,11 +776,11 @@ static void jobs(uint8_t*d,uint64_t VA,const A5RuntimeDraw*r,uint64_t indexVA){
  }
  /* Released Panfrost selects the line provoking vertex in DRAW rather than
   * PRIMITIVE; triangles keep their existing zero/default selection. */
- pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=VA+position_offset(r);c.flat_shading_vertex=r->primitive==A5RuntimeLine||r->primitive==A5RuntimeLineStrip;c.viewport=VA+VIEWPORT;c.varyings=VA+FS_VARY;c.varying_buffers=VA+FS_VARY_BUFS;c.uniform_buffers=VA+FS_UBOS;c.textures=VA+TEX_TABLE;c.samplers=VA+SAMPLERS;c.state=VA+FS_RSD;c.fbd=VA+FB;}
+ pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=VA+position_offset(r);c.flat_shading_vertex=r->primitive==A5RuntimeLine||r->primitive==A5RuntimeLineStrip;c.viewport=VA+VIEWPORT;c.varyings=VA+FS_VARY;c.varying_buffers=VA+FS_VARY_BUFS;c.uniform_buffers=VA+FS_UBOS;c.textures=VA+TEX_TABLE;c.samplers=VA+SAMPLERS;c.state=VA+FS_RSD;c.fbd=a5_fbd_ptr_v5(VA+FB);}
  pan_pack((struct mali_primitive_size_packed*)(d+0x1b8),PRIMITIVE_SIZE,c){c.fixed_sized=1;}
  pan_pack((struct mali_viewport_packed*)(d+VIEWPORT),VIEWPORT,c){c.scissor_minimum_x=r->scissorX;c.scissor_minimum_y=r->scissorY;c.scissor_maximum_x=r->scissorX+r->scissorWidth-1;c.scissor_maximum_y=r->scissorY+r->scissorHeight-1;}
  pan_pack((struct mali_job_header_packed*)(d+0x200),JOB_HEADER,c){c.type=MALI_JOB_TYPE_FRAGMENT;c.index=3;c.enable_texture_mapper=true;}
- pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=VA+FB;}
+ pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=a5_fbd_ptr_v5(VA+FB);}
 }
 static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
  const A5RuntimeDraw*r=&m->draw;const A5MaliCompiledProfile*p=r->profile;
@@ -849,18 +842,15 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
    A5MaliCompiledAttachmentState copy={15,0,0,0,1,0,1,0};
    plan=A5MaliLowerRenderState(&copy);plan.loadDestination=1;
   }else if(plan.route!=A5MaliStateFixed)return A5RuntimeUnsupported;
-  struct MALI_RENDERER_STATE state;
-  MALI_RENDERER_STATE_unpack((const struct mali_renderer_state_packed*)(d+FS_RSD),&state);
-  /* RSD overlay: blend_shader aliases the packed equation. Clear the
-   * decoded pointer arm before replacing equation bits, or old bits OR in. */
-  state.blend_shader=0;
-  state.multisample_misc.load_destination=plan.loadDestination;
-  state.blend_equation.color_mask=plan.writeMask;
-  state.blend_equation.rgb=(struct MALI_BLEND_FUNCTION){.a=plan.rgb.a,.b=plan.rgb.b,.c=plan.rgb.c,
+  /* v5: the equation lives in the BLEND descriptor after the RSD. Rebuild
+   * it whole (fixed function, no blend shader) instead of overlaying. */
+  struct MALI_BLEND_EQUATION e={0};
+  e.color_mask=plan.writeMask;
+  e.rgb=(struct MALI_BLEND_FUNCTION){.a=plan.rgb.a,.b=plan.rgb.b,.c=plan.rgb.c,
    .negate_a=plan.rgb.negateA,.negate_b=plan.rgb.negateB,.invert_c=plan.rgb.invertC};
-  state.blend_equation.alpha=(struct MALI_BLEND_FUNCTION){.a=plan.alpha.a,.b=plan.alpha.b,.c=plan.alpha.c,
+  e.alpha=(struct MALI_BLEND_FUNCTION){.a=plan.alpha.a,.b=plan.alpha.b,.c=plan.alpha.c,
    .negate_a=plan.alpha.negateA,.negate_b=plan.alpha.negateB,.invert_c=plan.alpha.invertC};
-  MALI_RENDERER_STATE_pack((struct mali_renderer_state_packed*)(d+FS_RSD),&state);
+  a5_pack_blend_v5(d+FS_RSD+MALI_RENDERER_STATE_LENGTH,true,plan.loadDestination,&e);
  }
 
  if(dynamic){
@@ -891,8 +881,8 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
    * remains copy, never applies the equation a second time. For general
    * framebuffer fetch preserve the actual pipeline blend equation and turn
    * on tilebuffer destination loads even when fixed-function blending is off. */
-  struct MALI_RENDERER_STATE rs;MALI_RENDERER_STATE_unpack((const struct mali_renderer_state_packed*)(d+FS_RSD),&rs);
-  rs.multisample_misc.load_destination=true;MALI_RENDERER_STATE_pack((struct mali_renderer_state_packed*)(d+FS_RSD),&rs);
+  struct MALI_BLEND bl;MALI_BLEND_unpack((const struct mali_blend_packed*)(d+FS_RSD+MALI_RENDERER_STATE_LENGTH),&bl);
+  bl.load_destination=true;MALI_BLEND_pack((struct mali_blend_packed*)(d+FS_RSD+MALI_RENDERER_STATE_LENGTH),&bl);
  }
  unsigned arena=0;
  int rc=resources(d,m,home,clear,generic_color,generic_textured,&arena);if(rc)return rc;

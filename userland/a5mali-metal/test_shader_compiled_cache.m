@@ -66,7 +66,7 @@ static NSMutableDictionary *receipt(void)
 {
     return [@{@"schema":@1,@"request_id":key,@"profile_id":@(testProfile),@"source_library":@"quartzcore",
         @"metallib_sha256":@"11c74cc42ce5137b73d44d427f75764f886656d4ddb374422d56b609ed2762d9",
-        @"gpu_id":@"07201000",@"compiler_abi":@1,@"recipe":[NSString stringWithFormat:@"quartzcore-generic-%u",testProfile],
+        @"gpu_id":@"08300010",@"compiler_abi":@1,@"recipe":[NSString stringWithFormat:@"quartzcore-generic-%u",testProfile],
         @"stage_compiled":@YES,@"pipeline_compatible":@NO,
         @"descriptor_sha256":key,
         @"vertex_constants_sha256":vertexConstants,@"fragment_constants_sha256":fragmentConstants,

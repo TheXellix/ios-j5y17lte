@@ -2,16 +2,16 @@
  * Actual GPU resource jobs, released Mesa26.2.4 v4 descriptors and RAW packing.
  * No Apple shaders, fixture data, expected pixels, or CPU rendering.
  */
-#define PAN_ARCH 4
+#define PAN_ARCH 5
 #include "runtime_resource_ops.h"
-#include "genxml/v4_pack.h"
+#include "runtime_fb_v5.h"
 #include <string.h>
 typedef struct{unsigned kind,bits,dim;const uint8_t*code;unsigned bytes,tag,regs,ubos,attributes,varyings;}A5ResourceShader;
 #include "A5MaliResourceOpsData.inc"
 enum{FB=0x300,VRS=0x500,FRS=0x540,TEX=0x600,TT=0x640,SAMP=0x660,
  VUBO=0x700,FUBO=0x740,ATTR=0x800,ABUF=0x840,VV=0x880,VB=0x8c0,
  FV=0x940,FVB=0x980,VP=0x9c0,VERTICES=0x1000,VSYS=0x1100,FSYS=0x1200,
- PJ=0x1800,PRS=0x1900,PPOS=0x1940,PTEX=0x1980,PTT=0x19c0,PSAMP=0x19e0,
+ PJ=0x1800,PRS=0x1900,PPOS=0x1a80,PTEX=0x1980,PTT=0x19c0,PSAMP=0x19e0,
  PVP=0x1a00,PV=0x1a20,PVB=0x1a40,PCODE=0x1c00,
  VCODE=0x2000,FCODE=0x3000,POLY=0x10000,HEAP=0x18000,HEAP_END=0x28000,
  POS=0x38000,PSIZ=0x39000,UV=0x39400,
@@ -21,10 +21,12 @@ enum{FB=0x300,VRS=0x500,FRS=0x540,TEX=0x600,TT=0x640,SAMP=0x660,
 ALIGNED(VRS,RENDERER_STATE);ALIGNED(FRS,RENDERER_STATE);ALIGNED(TEX,TEXTURE);ALIGNED(SAMP,SAMPLER);
 ALIGNED(PJ,TILER_JOB);ALIGNED(PRS,RENDERER_STATE);ALIGNED(PTEX,TEXTURE);ALIGNED(PSAMP,SAMPLER);
 ALIGNED(PVP,VIEWPORT);ALIGNED(PV,ATTRIBUTE);ALIGNED(PVB,ATTRIBUTE_BUFFER);
-_Static_assert(MALI_ATTRIBUTE_BUFFER_LENGTH==16,"released v4 table stride");
+_Static_assert(MALI_ATTRIBUTE_BUFFER_LENGTH==16,"released table stride");
 _Static_assert(PJ+MALI_TILER_JOB_LENGTH<=PRS,"preload job overlap");
-_Static_assert(PRS+MALI_RENDERER_STATE_LENGTH<=PPOS,"preload state overlap");
-_Static_assert(PPOS+64<=PTEX,"preload positions overlap");
+/* v5: a BLEND descriptor follows each fragment RSD (FRS, PRS). */
+_Static_assert(FRS+MALI_RENDERER_STATE_LENGTH+MALI_BLEND_LENGTH<=TEX,"fragment state/blend overlap");
+_Static_assert(PRS+MALI_RENDERER_STATE_LENGTH+MALI_BLEND_LENGTH<=PTEX,"preload state/blend overlap");
+_Static_assert(PVB+MALI_ATTRIBUTE_BUFFER_LENGTH<=PPOS&&PPOS+64<=PCODE,"preload positions overlap");
 _Static_assert(PTEX+MALI_TEXTURE_LENGTH+MALI_SURFACE_WITH_STRIDE_LENGTH<=PTT,"preload texture overlap");
 _Static_assert(PSAMP+MALI_SAMPLER_LENGTH<=PVP,"preload sampler overlap");
 _Static_assert(PCODE+1024<=VCODE,"preload code overlap");
@@ -61,15 +63,17 @@ static void rs(uint8_t*d,unsigned p,uint64_t code,const A5ResourceShader*s,int v
  c.shader.shader=code+s->tag;c.shader.attribute_count=vs?2:0;c.shader.varying_count=vs?3:1;c.shader.texture_count=vs?0:1;c.shader.sampler_count=vs?0:1;
  c.properties.uniform_buffer_count=1;c.properties.work_register_count=s->regs;c.properties.force_early_z=true;
  c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;
- c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;c.stencil_mask_misc.write_enable=!vs;c.stencil_mask_misc.dither_disable=true;
- c.blend_equation.rgb.a=MALI_BLEND_OPERAND_A_SRC;c.blend_equation.rgb.b=MALI_BLEND_OPERAND_B_SRC;c.blend_equation.rgb.c=MALI_BLEND_OPERAND_C_ZERO;
- c.blend_equation.alpha.a=MALI_BLEND_OPERAND_A_SRC;c.blend_equation.alpha.b=MALI_BLEND_OPERAND_B_SRC;c.blend_equation.alpha.c=MALI_BLEND_OPERAND_C_ZERO;c.blend_equation.color_mask=15;}}
+ c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;}
+ if(!vs){struct MALI_BLEND_EQUATION e={0};
+  e.rgb.a=MALI_BLEND_OPERAND_A_SRC;e.rgb.b=MALI_BLEND_OPERAND_B_SRC;e.rgb.c=MALI_BLEND_OPERAND_C_ZERO;
+  e.alpha.a=MALI_BLEND_OPERAND_A_SRC;e.alpha.b=MALI_BLEND_OPERAND_B_SRC;e.alpha.c=MALI_BLEND_OPERAND_C_ZERO;e.color_mask=15;
+  a5_pack_blend_v5(d+p+MALI_RENDERER_STATE_LENGTH,true,false,&e);}}
 static void tiler(uint8_t*d,unsigned off,uint64_t va,uint64_t pos,unsigned vp,unsigned vary,unsigned varyingbuf,unsigned rsd,unsigned textures,unsigned sampler,unsigned ubos,unsigned index){
  pan_pack((struct mali_job_header_packed*)(d+off),JOB_HEADER,c){c.type=MALI_JOB_TYPE_TILER;c.index=index;c.dependency_1=1;c.enable_texture_mapper=true;}
  pan_pack((struct mali_invocation_packed*)(d+off+32),INVOCATION,c){c.invocations=3;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_primitive_packed*)(d+off+40),PRIMITIVE,c){c.draw_mode=MALI_DRAW_MODE_TRIANGLE_STRIP;c.index_count=4;c.job_task_split=6;}
  pan_pack((struct mali_draw_packed*)(d+off+64),DRAW,c){c.position=pos;c.viewport=va+vp;c.varyings=va+vary;c.varying_buffers=va+varyingbuf;
- c.state=va+rsd;c.textures=va+textures;c.samplers=va+sampler;c.uniform_buffers=va+ubos;c.thread_storage=va+FB;}
+ c.state=va+rsd;c.textures=va+textures;c.samplers=va+sampler;c.uniform_buffers=va+ubos;c.fbd=a5_fbd_ptr_v5(va+FB);}
  pan_pack((struct mali_primitive_size_packed*)(d+off+184),PRIMITIVE_SIZE,c){c.fixed_sized=1;}
 }
 static int encode(const A5RuntimeResourceOp*r,uint8_t*d){
@@ -96,13 +100,14 @@ static int encode(const A5RuntimeResourceOp*r,uint8_t*d){
  pan_pack((struct mali_uniform_buffer_packed*)(d+VUBO),UNIFORM_BUFFER,c){c.pointer=va+VSYS;c.entries=2;}
  pan_pack((struct mali_uniform_buffer_packed*)(d+FUBO),UNIFORM_BUFFER,c){c.pointer=va+FSYS;c.entries=1;}
  tex(d,TEX,TT,va,&r->source,r->sourceType,bits,mip);samp(d,SAMP);
- pan_section_pack(d+FB,FRAMEBUFFER,LOCAL_STORAGE,c){c.wls_instances=MALI_LOCAL_STORAGE_NO_WORKGROUP_MEM;}
- pan_section_pack(d+FB,FRAMEBUFFER,PARAMETERS,c){c.internal_format=(mip||bits==8)?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8:MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE;
- c.color_writeback_format=mip?MALI_COLOR_FORMAT_R8G8B8A8:bits==8?MALI_COLOR_FORMAT_R8:bits==16?MALI_COLOR_FORMAT_1_16B_CHANNEL:bits==32?MALI_COLOR_FORMAT_1_32B_CHANNEL:MALI_COLOR_FORMAT_2_32B_CHANNELS;
- c.swizzle=mip?(r->destination.metalPixelFormat==80?0x60a:0x688):bits==8?R:0x688;c.color_write_enable=true;c.color_block_format=MALI_BLOCK_FORMAT_LINEAR;c.tie_break_rule=MALI_TIE_BREAK_RULE_MINUS_180_IN_0_OUT;
- c.bound_max_x=r->destination.width-1;c.bound_max_y=r->destination.height-1;c.color_writeback.base=r->destination.gpuVA;c.color_writeback.row_stride=r->destination.rowBytes;}
  unsigned tiles=((r->destination.width+1023)/1024)*((r->destination.height+1023)/1024),header=0x200+((tiles*8)/0x200)*0x200,full=0x200+tiles*0x200;
- pan_section_pack(d+FB,FRAMEBUFFER,TILER,c){c.polygon_list=va+POLY;c.polygon_list_body=va+POLY+header;c.polygon_list_size=full;c.hierarchy_mask=0x1c7;c.heap_start=va+HEAP;c.heap_end=va+HEAP_END;}p32(d,POLY+header,0xa0000000);
+ {A5FbV5 f={.width=r->destination.width,.height=r->destination.height,.bound_max_x=r->destination.width-1,.bound_max_y=r->destination.height-1,
+  .internal_format=(mip||bits==8)?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8:MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE,
+  .writeback_format=mip?MALI_COLOR_FORMAT_R8G8B8A8:bits==8?MALI_COLOR_FORMAT_R8:bits==16?A5_CF_1x16:bits==32?A5_CF_1x32:A5_CF_2x32,
+  .swizzle=mip?(r->destination.metalPixelFormat==80?0x60a:0x688):bits==8?R:0x688,
+  .base=r->destination.gpuVA,.row_stride=r->destination.rowBytes,.surface_stride=r->destination.rowBytes*r->destination.height,.dither=false,
+  .polygon_list=va+POLY,.polygon_list_body=va+POLY+header,.polygon_list_size=full,.hierarchy_mask=0x1c7,.heap_start=va+HEAP,.heap_end=va+HEAP_END};
+  a5_pack_fb_v5(d+FB,&f);}p32(d,POLY+header,0xa0000000);
  rs(d,VRS,va+VCODE,vs,1);rs(d,FRS,va+FCODE,fs,0);
  attrib(d,ATTR,0,MALI_RGBA32F,0x688,0);attrib(d,ATTR+8,0,MALI_RG32F,RG,16);buf(d,ABUF,va+VERTICES,24,96);
  attrib(d,VV,0,MALI_SNAP_4,0x688,0);attrib(d,VV+8,1,MALI_R16F,R,0);attrib(d,VV+16,2,MALI_RG32UI,RG,0);
@@ -111,11 +116,11 @@ static int encode(const A5RuntimeResourceOp*r,uint8_t*d){
  pan_pack((struct mali_job_header_packed*)d,JOB_HEADER,c){c.type=MALI_JOB_TYPE_VERTEX;c.index=1;c.next=va+0x100;}
  pan_pack((struct mali_invocation_packed*)(d+32),INVOCATION,c){c.invocations=3;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_compute_job_parameters_packed*)(d+MALI_COMPUTE_JOB_SECTION_PARAMETERS_OFFSET),COMPUTE_JOB_PARAMETERS,c){c.job_task_split=5;}
- pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ABUF;c.uniform_buffers=va+VUBO;c.varyings=va+VV;c.varying_buffers=va+VB;c.thread_storage=va+FB;}
+ pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ABUF;c.uniform_buffers=va+VUBO;c.varyings=va+VV;c.varying_buffers=va+VB;c.thread_storage=a5_fbd_ptr_v5(va+FB);}
  tiler(d,0x100,va,va+POS,VP,FV,FVB,FRS,TT,SAMP,FUBO,2);
  pan_pack((struct mali_viewport_packed*)(d+VP),VIEWPORT,c){c.scissor_minimum_x=r->destinationX;c.scissor_minimum_y=r->destinationY;c.scissor_maximum_x=r->destinationX+r->width-1;c.scissor_maximum_y=r->destinationY+r->height-1;}
  pan_pack((struct mali_job_header_packed*)(d+0x200),JOB_HEADER,c){c.type=MALI_JOB_TYPE_FRAGMENT;c.index=3;c.enable_texture_mapper=true;}
- pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->destinationX/16;c.bound_min_y=r->destinationY/16;c.bound_max_x=(r->destinationX+r->width-1)/16;c.bound_max_y=(r->destinationY+r->height-1)/16;c.framebuffer=va+FB;}
+ pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->destinationX/16;c.bound_min_y=r->destinationY/16;c.bound_max_x=(r->destinationX+r->width-1)/16;c.bound_max_y=(r->destinationY+r->height-1)/16;c.framebuffer=a5_fbd_ptr_v5(va+FB);}
  if(!mip&&(r->destinationX||r->destinationY||r->width!=r->destination.width||r->height!=r->destination.height)){
   const A5ResourceShader*ps=shader(1,bits,r->destinationType==A5ResourceTexture1D?1:2);if(!ps||ps->bytes>1024)return A5RuntimeUnsupported;
   memcpy(d+PCODE,ps->code,ps->bytes);rs(d,PRS,va+PCODE,ps,0);

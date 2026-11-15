@@ -160,7 +160,7 @@ static BOOL payload(id p) {
                 ]) &&
            exact(p[@"schema"], 1) && [p[@"kind"] isEqual:@"function"] &&
            [p[@"source_library"] isEqual:@"quartzcore"] && [p[@"metallib_sha256"] isEqual:librarySHA] &&
-           [p[@"gpu_id"] isEqual:@"07201000"] && (exact(p[@"compiler_abi"], 1)||([p[@"stage"] isEqual:@"fragment"]&&exact(p[@"compiler_abi"],2))) &&
+           [p[@"gpu_id"] isEqual:@"08300010"] && (exact(p[@"compiler_abi"], 1)||([p[@"stage"] isEqual:@"fragment"]&&exact(p[@"compiler_abi"],2))) &&
            ([p[@"stage"] isEqual:@"vertex"] || [p[@"stage"] isEqual:@"fragment"]) &&
            identifier(p[@"function"]) && constants(p[@"named_constants"], NO) &&
            constants(p[@"indexed_constants"], YES);
@@ -615,7 +615,7 @@ A5MaliDynamicShaderCacheEntry *A5MaliLoadDynamicShaderStage(NSString *requestID,
         if (![r isKindOfClass:NSDictionary.class] || !exact(r[@"schema"], 2) ||
             ![r[@"kind"] isEqual:@"dynamic-stage"] || ![r[@"request_id"] isEqual:requestID] ||
             ![r[@"source_library"] isEqual:@"quartzcore"] || ![r[@"metallib_sha256"] isEqual:librarySHA] ||
-            ![r[@"gpu_id"] isEqual:@"07201000"] || ![r[@"compiler_abi"] isEqual:functionPayload[@"compiler_abi"]] ||
+            ![r[@"gpu_id"] isEqual:@"08300010"] || ![r[@"compiler_abi"] isEqual:functionPayload[@"compiler_abi"]] ||
             ![r[@"stage"] isEqual:functionPayload[@"stage"]] ||
             ![r[@"function"] isEqual:functionPayload[@"function"]] ||
             ![r[@"named_constants_sha256"] isEqual:digest(json(functionPayload[@"named_constants"]))] ||

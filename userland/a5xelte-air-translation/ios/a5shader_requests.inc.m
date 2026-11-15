@@ -71,7 +71,7 @@ static BOOL a5RequestFunction(NSDictionary *f, NSString *stage,
     return [f[@"schema"] isEqual:@1] && [f[@"kind"] isEqual:@"function"] &&
         [f[@"source_library"] isEqual:@"quartzcore"] &&
         [f[@"metallib_sha256"] isEqual:sourceSHA] &&
-        [f[@"gpu_id"] isEqual:@"07201000"] &&
+        [f[@"gpu_id"] isEqual:@"08300010"] &&
         ([f[@"compiler_abi"] isEqual:@1]||([stage isEqual:@"fragment"]&&[f[@"compiler_abi"] isEqual:@2])) && [f[@"stage"] isEqual:stage] &&
         [f[@"function"] isEqual:name] &&
         [f[@"named_constants"] isEqual:constants] &&
@@ -87,7 +87,7 @@ static BOOL a5KnownProfile(NSDictionary *request, NSDictionary *known)
     return [request[@"schema"] isEqual:@1] &&
         [request[@"source_library"] isEqual:@"quartzcore"] &&
         [request[@"metallib_sha256"] isEqual:known[@"metallib_sha256"]] &&
-        [request[@"gpu_id"] isEqual:@"07201000"] &&
+        [request[@"gpu_id"] isEqual:@"08300010"] &&
         [request[@"compiler_abi"] isEqual:@1] &&
         [request[@"descriptor"] isKindOfClass:NSDictionary.class] &&
         a5RequestFunction(request[@"vertex"],@"vertex",known[@"vertex_function"],
@@ -298,7 +298,7 @@ static void a5CompileKnown(NSString *self, NSDictionary *request, NSDictionary *
     NSString *recipeName = [NSString stringWithFormat:@"quartzcore-generic-%@",profile];
     NSDictionary *receipt = @{@"schema":@1,@"request_id":key,@"profile_id":profile,
         @"source_library":@"quartzcore",@"metallib_sha256":known[@"metallib_sha256"],
-        @"gpu_id":@"07201000",@"compiler_abi":@1,
+        @"gpu_id":@"08300010",@"compiler_abi":@1,
         @"recipe":recipeName,@"stage_compiled":@YES,
         @"pipeline_compatible":@NO,
         @"descriptor_sha256":digest(descriptorData),
@@ -385,7 +385,7 @@ static BOOL a5PublishedCurrentOrRetire603(NSString *key, NSDictionary *known)
        ![receipt[@"profile_id"] isEqual:@603]||
        ![receipt[@"source_library"] isEqual:@"quartzcore"]||
        ![receipt[@"metallib_sha256"] isEqual:known[@"metallib_sha256"]]||
-       ![receipt[@"gpu_id"] isEqual:@"07201000"]||
+       ![receipt[@"gpu_id"] isEqual:@"08300010"]||
        ![receipt[@"compiler_abi"] isEqual:@1]||
        ![receipt[@"recipe"] isEqual:@"quartzcore-generic-603"]||
        ![receipt[@"vertex"][@"sha256"] isEqual:vertexSHA]||
@@ -488,7 +488,7 @@ static BOOL a5DynamicRequest(NSDictionary *request,NSString *librarySHA)
         a5Unsigned(request[@"schema"],1)&&[request[@"schema"] isEqual:@1]&&
         [request[@"kind"] isEqual:@"function"]&&[request[@"source_library"] isEqual:@"quartzcore"]&&
         [request[@"metallib_sha256"] isEqual:librarySHA]&&
-        [request[@"gpu_id"] isEqual:@"07201000"]&&
+        [request[@"gpu_id"] isEqual:@"08300010"]&&
         a5Unsigned(request[@"compiler_abi"],2)&&([request[@"compiler_abi"] isEqual:@1]||
         ([request[@"stage"] isEqual:@"fragment"]&&[request[@"compiler_abi"] isEqual:@2]))&&
         ( [request[@"stage"] isEqual:@"vertex"]||[request[@"stage"] isEqual:@"fragment"] )&&
@@ -553,7 +553,7 @@ static NSDictionary *a5DynamicIdentity(NSDictionary *request,BOOL success)
 {
     NSMutableDictionary *identity=[@{@"schema":@2,@"kind":@"dynamic-stage",@"request_id":request[@"request_id"],
         @"source_library":@"quartzcore",@"metallib_sha256":request[@"metallib_sha256"],
-        @"gpu_id":@"07201000",@"compiler_abi":request[@"compiler_abi"],@"stage":request[@"stage"],
+        @"gpu_id":@"08300010",@"compiler_abi":request[@"compiler_abi"],@"stage":request[@"stage"],
         @"function":request[@"function"],@"stage_compiled":@(success),@"pipeline_compatible":@NO,
         @"named_constants_sha256":digest(a5Canonical(request[@"named_constants"])),
         @"indexed_constants_sha256":digest(a5Canonical(request[@"indexed_constants"])),

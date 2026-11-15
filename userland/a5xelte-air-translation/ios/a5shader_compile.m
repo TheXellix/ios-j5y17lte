@@ -510,7 +510,7 @@ static void compilePair(NSString *self, NSString *pair)
         [midgard addObject:[prefix stringByAppendingString:suffix]];
     if ([pair isEqual:@"downsample_4"]) [midgard addObject:pair];
     run(self,midgard,[work stringByAppendingPathComponent:@"midgard.log"]);
-    NSMutableDictionary *report = [@{@"key":key,@"pair":pair,@"seconds":@(seconds()-start),@"gpu_id":@"07201000"} mutableCopy];
+    NSMutableDictionary *report = [@{@"key":key,@"pair":pair,@"seconds":@(seconds()-start),@"gpu_id":@"08300010"} mutableCopy];
     for (NSString *stage in @[@"vert",@"frag"]) {
         NSData *bytes = regularData([prefix stringByAppendingFormat:@".%@.midgard",stage],1024*1024);
         if (bytes.length % 16) fail(@"unaligned Midgard binary");

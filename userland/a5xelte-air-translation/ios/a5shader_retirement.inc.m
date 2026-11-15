@@ -138,7 +138,7 @@ static int a5RetirePublication(NSDictionary *request,NSArray *knownProfiles,BOOL
   else{
    NSNumber *profile=known[@"profile_id"];
    NSDictionary *expected=@{@"schema":@1,@"request_id":request[@"request_id"],@"profile_id":profile,
-    @"source_library":@"quartzcore",@"metallib_sha256":known[@"metallib_sha256"],@"gpu_id":@"07201000",@"compiler_abi":@1,
+    @"source_library":@"quartzcore",@"metallib_sha256":known[@"metallib_sha256"],@"gpu_id":@"08300010",@"compiler_abi":@1,
     @"recipe":[NSString stringWithFormat:@"quartzcore-generic-%@",profile],@"stage_compiled":@YES,@"pipeline_compatible":@NO,
     @"descriptor_sha256":digest(a5Canonical(request[@"descriptor"])),
     @"vertex_constants_sha256":digest(a5Canonical(request[@"vertex"][@"named_constants"])),

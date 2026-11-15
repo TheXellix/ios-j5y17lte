@@ -60,7 +60,7 @@ static BOOL identifier(id value)
 static NSDictionary *base(NSString *kind)
 {
     return @{ @"schema":@1,@"kind":kind,@"source_library":@"quartzcore",
-        @"metallib_sha256":sourceSHA,@"gpu_id":@"07201000",@"compiler_abi":@1 };
+        @"metallib_sha256":sourceSHA,@"gpu_id":@"08300010",@"compiler_abi":@1 };
 }
 /* Exact copied-constant widths, not vector ABI alignment. The iOS16 stock
  * _MTLConstantDataSize table agrees, including UChar3=3/Float3=12/Long3=24.
@@ -167,7 +167,7 @@ static BOOL functionPayload(NSDictionary *value,NSString *stage)
         [value[@"schema"] isEqual:@1]&&([value[@"compiler_abi"] isEqual:@1]||
         ([stage isEqual:@"fragment"]&&[value[@"compiler_abi"] isEqual:@2]))&&
         [value[@"source_library"] isEqual:@"quartzcore"]&&[value[@"metallib_sha256"] isEqual:sourceSHA]&&
-        [value[@"gpu_id"] isEqual:@"07201000"]&&[value[@"stage"] isEqual:stage]&&
+        [value[@"gpu_id"] isEqual:@"08300010"]&&[value[@"stage"] isEqual:stage]&&
         identifier(value[@"function"])&&validConstantArray(value[@"named_constants"],NO)&&
         validConstantArray(value[@"indexed_constants"],YES);
 }
@@ -307,7 +307,7 @@ static NSData *requestData(NSDictionary *payload,NSString **requestID,NSError **
          functionPayload(payload[@"vertex"],@"vertex")&&functionPayload(payload[@"fragment"],@"fragment")&&
          validDescriptor(payload[@"descriptor"]));
     if(!valid||![payload[@"schema"] isEqual:@1]||![payload[@"source_library"] isEqual:@"quartzcore"]||
-        ![payload[@"metallib_sha256"] isEqual:sourceSHA]||![payload[@"gpu_id"] isEqual:@"07201000"]||
+        ![payload[@"metallib_sha256"] isEqual:sourceSHA]||![payload[@"gpu_id"] isEqual:@"08300010"]||
         (![payload[@"compiler_abi"] isEqual:@1]&&!(function&&[payload[@"stage"] isEqual:@"fragment"]&&[payload[@"compiler_abi"] isEqual:@2]))||payload[@"request_id"]||payload[@"owner_uid"]){
         reject(error,@"invalid compiler request envelope");return nil;
     }

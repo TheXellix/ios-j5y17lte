@@ -69,7 +69,7 @@ int main(int argc,char**argv){
   }
  }
  nir_shader_gather_info(b.shader,nir_shader_get_entrypoint(b.shader));if(kind)BITSET_SET(b.shader->info.textures_used,0);
- struct pan_compile_inputs in={.gpu_id=0x07201000,.is_blit=true,.no_idvs=true};struct pan_shader_info info={0};struct util_dynarray binary=UTIL_DYNARRAY_INIT;
+ struct pan_compile_inputs in={.gpu_id=0x08300010 /* j5y17lte Mali-T830 r0p1 */,.is_blit=true,.no_idvs=true};struct pan_shader_info info={0};struct util_dynarray binary=UTIL_DYNARRAY_INIT;
  struct pan_varying_layout varying_layout;
  if(!kind){pan_varying_collect_formats(&varying_layout,b.shader,in.gpu_id,false,false);pan_build_varying_layout_compact(&varying_layout,b.shader,in.gpu_id);in.varying_layout=&varying_layout;}
  pan_preprocess_nir(b.shader,in.gpu_id);

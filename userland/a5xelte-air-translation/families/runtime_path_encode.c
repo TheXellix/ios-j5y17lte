@@ -3,11 +3,11 @@
  * blend variants are compiled from the original validated SPIR-V with Mesa's
  * nir_lower_blend and pan_nir_lower_framebuffer, not replacement fragment code.
  */
-#define PAN_ARCH 4
+#define PAN_ARCH 5
 #include "runtime_path_encode.h"
 #include <math.h>
 #include <string.h>
-#include "genxml/v4_pack.h"
+#include "runtime_fb_v5.h"
 #include "runtime_preload.h"
 enum {N=0x40000,FB=0x300,VRS=0x500,FRS=0x540,VD=0x600,FD=0x640,
  ATTR=0x700,ATTRBUF=0x800,VV=0x900,FV=0xa00,VBUFS=0xb00,VP=0xc00,
@@ -68,13 +68,18 @@ static int encode(const A5RuntimePathDraw*m,uint8_t*d){
   else return A5RuntimeUnsupported;
  }
  f32(d,VS_SYS+512,r->viewportWidth*.5);f32(d,VS_SYS+516,r->viewportHeight*.5);f32(d,VS_SYS+520,(r->viewportFar-r->viewportNear)*.5);f32(d,VS_SYS+528,r->viewportX+r->viewportWidth*.5);f32(d,VS_SYS+532,r->viewportY+r->viewportHeight*.5);f32(d,VS_SYS+536,(r->viewportFar+r->viewportNear)*.5);
- pan_section_pack(d+FB,FRAMEBUFFER,LOCAL_STORAGE,c){c.wls_instances=MALI_LOCAL_STORAGE_NO_WORKGROUP_MEM;}
- pan_section_pack(d+FB,FRAMEBUFFER,PARAMETERS,c){c.bound_max_x=out->width-1;c.bound_max_y=out->height-1;c.internal_format=MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE;c.color_writeback_format=stroke?MALI_COLOR_FORMAT_2_32B_CHANNELS:MALI_COLOR_FORMAT_1_32B_CHANNEL;c.color_block_format=MALI_BLOCK_FORMAT_LINEAR;c.color_write_enable=true;c.color_writeback.base=out->gpuVA;c.color_writeback.row_stride=out->rowBytes;c.swizzle=0x688;c.tie_break_rule=MALI_TIE_BREAK_RULE_MINUS_180_IN_0_OUT;}
  unsigned tiles=((out->width+1023)/1024)*((out->height+1023)/1024),header=0x200+(tiles*8/0x200)*0x200,full=0x200+tiles*0x200;if(POLY+full>VS)return A5RuntimeBounds;
- pan_section_pack(d+FB,FRAMEBUFFER,TILER,c){c.polygon_list=va+POLY;c.polygon_list_body=va+POLY+header;c.polygon_list_size=full;c.hierarchy_mask=0x1c7;c.heap_start=va+HEAP;c.heap_end=va+HEAP_END;}u32(d,POLY+header,0xa0000000);
+ {A5FbV5 f={.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
+  .internal_format=MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE,.writeback_format=stroke?A5_CF_2x32:A5_CF_1x32,.swizzle=0x688,
+  .base=out->gpuVA,.row_stride=out->rowBytes,.surface_stride=out->rowBytes*out->height,.dither=false,
+  .polygon_list=va+POLY,.polygon_list_body=va+POLY+header,.polygon_list_size=full,.hierarchy_mask=0x1c7,.heap_start=va+HEAP,.heap_end=va+HEAP_END};
+  a5_pack_fb_v5(d+FB,&f);}u32(d,POLY+header,0xa0000000);
  unsigned nvar=stroke?5:cubic?4:3;
  pan_pack((struct mali_renderer_state_packed*)(d+VRS),RENDERER_STATE,c){c.shader.shader=va+VS+5;c.shader.attribute_count=18;c.shader.varying_count=nvar+2;c.properties.uniform_buffer_count=4;c.properties.work_register_count=vs->workRegisters;c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;}
- pan_pack((struct mali_renderer_state_packed*)(d+FRS),RENDERER_STATE,c){c.shader.shader=va+FS+5;c.shader.varying_count=nvar+(stroke?0:1);c.properties.uniform_buffer_count=1;c.properties.work_register_count=fs->workRegisters;c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;c.multisample_misc.load_destination=true;c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;c.stencil_mask_misc.write_enable=true;c.stencil_mask_misc.dither_disable=true;c.blend_equation.color_mask=stroke?15:1;c.blend_equation.rgb.a=MALI_BLEND_OPERAND_A_SRC;c.blend_equation.rgb.b=MALI_BLEND_OPERAND_B_SRC;c.blend_equation.rgb.c=MALI_BLEND_OPERAND_C_ZERO;c.blend_equation.alpha.a=MALI_BLEND_OPERAND_A_SRC;c.blend_equation.alpha.b=MALI_BLEND_OPERAND_B_SRC;c.blend_equation.alpha.c=MALI_BLEND_OPERAND_C_ZERO;}
+ pan_pack((struct mali_renderer_state_packed*)(d+FRS),RENDERER_STATE,c){c.shader.shader=va+FS+5;c.shader.varying_count=nvar+(stroke?0:1);c.properties.uniform_buffer_count=1;c.properties.work_register_count=fs->workRegisters;c.multisample_misc.sample_mask=0xffff;c.multisample_misc.depth_function=MALI_FUNC_ALWAYS;c.stencil_mask_misc.alpha_test_compare_function=MALI_FUNC_ALWAYS;}
+ {struct MALI_BLEND_EQUATION e={0};e.color_mask=stroke?15:1;e.rgb.a=MALI_BLEND_OPERAND_A_SRC;e.rgb.b=MALI_BLEND_OPERAND_B_SRC;e.rgb.c=MALI_BLEND_OPERAND_C_ZERO;
+  e.alpha.a=MALI_BLEND_OPERAND_A_SRC;e.alpha.b=MALI_BLEND_OPERAND_B_SRC;e.alpha.c=MALI_BLEND_OPERAND_C_ZERO;
+  a5_pack_blend_v5(d+FRS+MALI_RENDERER_STATE_LENGTH,true,true,&e);}
  pan_pack((struct mali_attribute_vertex_id_packed*)(d+ATTRBUF),ATTRIBUTE_VERTEX_ID,c){c.divisor_r=31;c.divisor_p=4;}pan_pack((struct mali_attribute_instance_id_packed*)(d+ATTRBUF+32),ATTRIBUTE_INSTANCE_ID,c){c.divisor_r=31;c.divisor_e=1;c.divisor_p=0x7fffffff;}
  at(d,ATTR+16*8,0,MALI_R32UI,1,0);at(d,ATTR+17*8,2,MALI_R32UI,1,0);at(d,VV,0,MALI_SNAP_4,4,0);at(d,VV+8,1,MALI_R16F,1,0);ab(d,va,0,POS,16,64);ab(d,va,1,PSIZ,2,8);ab(d,va,2,GENERAL,32,128);
  unsigned comps[5]={1,1,1,1,1},offs[5]={0,4,8,12,16};if(cubic){comps[0]=comps[1]=2;offs[0]=0;offs[1]=8;offs[2]=16;offs[3]=20;}if(stroke){comps[0]=4;offs[0]=0;offs[1]=16;offs[2]=20;offs[3]=24;offs[4]=28;}
@@ -83,15 +88,17 @@ static int encode(const A5RuntimePathDraw*m,uint8_t*d){
  pan_pack((struct mali_job_header_packed*)d,JOB_HEADER,c){c.type=MALI_JOB_TYPE_VERTEX;c.index=1;c.next=va+0x100;}
  pan_pack((struct mali_invocation_packed*)(d+32),INVOCATION,c){c.invocations=3;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_compute_job_parameters_packed*)(d+MALI_COMPUTE_JOB_SECTION_PARAMETERS_OFFSET),COMPUTE_JOB_PARAMETERS,c){c.job_task_split=5;}
- pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ATTRBUF;c.uniform_buffers=va+VD;c.varyings=va+VV;c.varying_buffers=va+VBUFS;c.thread_storage=va+FB;}
+ pan_pack((struct mali_draw_packed*)(d+64),DRAW,c){c.state=va+VRS;c.attributes=va+ATTR;c.attribute_buffers=va+ATTRBUF;c.uniform_buffers=va+VD;c.varyings=va+VV;c.varying_buffers=va+VBUFS;c.thread_storage=a5_fbd_ptr_v5(va+FB);}
  pan_pack((struct mali_job_header_packed*)(d+0x100),JOB_HEADER,c){c.type=MALI_JOB_TYPE_TILER;c.index=2;c.dependency_1=1;c.enable_texture_mapper=true;}
  pan_pack((struct mali_invocation_packed*)(d+0x120),INVOCATION,c){c.invocations=3;c.workgroups_z_shift=32;c.thread_group_split=2;}
  pan_pack((struct mali_primitive_packed*)(d+0x128),PRIMITIVE,c){c.draw_mode=MALI_DRAW_MODE_TRIANGLE_STRIP;c.index_count=4;c.job_task_split=6;}
- pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=va+POS;c.viewport=va+VP;c.varyings=va+FV;c.varying_buffers=va+VBUFS;c.uniform_buffers=va+FD;c.state=va+FRS;c.fbd=va+FB;}
+ pan_pack((struct mali_draw_packed*)(d+0x140),DRAW,c){c.position=va+POS;c.viewport=va+VP;c.varyings=va+FV;c.varying_buffers=va+VBUFS;c.uniform_buffers=va+FD;c.state=va+FRS;c.fbd=a5_fbd_ptr_v5(va+FB);}
  pan_pack((struct mali_primitive_size_packed*)(d+0x1b8),PRIMITIVE_SIZE,c){c.fixed_sized=1;}
  pan_pack((struct mali_viewport_packed*)(d+VP),VIEWPORT,c){c.scissor_minimum_x=r->scissorX;c.scissor_minimum_y=r->scissorY;c.scissor_maximum_x=r->scissorX+r->scissorWidth-1;c.scissor_maximum_y=r->scissorY+r->scissorHeight-1;}
  pan_pack((struct mali_job_header_packed*)(d+0x200),JOB_HEADER,c){c.type=MALI_JOB_TYPE_FRAGMENT;c.index=3;c.enable_texture_mapper=true;}
- pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=va+FB;}
+ pan_pack((struct mali_fragment_job_payload_packed*)(d+0x220),FRAGMENT_JOB_PAYLOAD,c){c.bound_min_x=r->scissorX/16;c.bound_min_y=r->scissorY/16;c.bound_max_x=(r->scissorX+r->scissorWidth-1)/16;c.bound_max_y=(r->scissorY+r->scissorHeight-1)/16;c.framebuffer=a5_fbd_ptr_v5(va+FB);}
  return a5_runtime_preload(d,va,out);
 }
+_Static_assert(FB+A5_FB_V5_BYTES<=VRS,"v5 MFBD + RT before the RSDs");
+_Static_assert(FRS+MALI_RENDERER_STATE_LENGTH+MALI_BLEND_LENGTH<=VD,"v5 BLEND after the fragment RSD");
 int A5MaliEncodeRuntimePathPass(const A5RuntimePathDraw*m,void*out,size_t n){if(!out||n!=N)return A5RuntimeInvalid;memset(out,0,n);int rc=m?encode(m,out):A5RuntimeInvalid;if(rc)memset(out,0,n);return rc;}

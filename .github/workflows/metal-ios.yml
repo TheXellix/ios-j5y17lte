@@ -67,10 +67,44 @@ jobs:
           python3 userland/a5xelte-air-translation/ios/build_midgard_ios.py \
             "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$RUNNER_TEMP/out/midgard" --jobs 4
 
-      - name: A5MaliMetal provider bundle
+      - name: Host Mesa template for the runtime encoders
         run: |
           set -eux
-          sh userland/a5mali-metal/StockMetalPlugin/build_local.sh "$RUNNER_TEMP/out/plugin"
+          mkdir -p "$RUNNER_TEMP/hostmesa"
+          tar -xf "$RUNNER_TEMP/mesa-26.2.4.tar.xz" -C "$RUNNER_TEMP/hostmesa"
+          M="$RUNNER_TEMP/hostmesa/mesa-26.2.4"
+          python3 - "$M" <<'PY'
+          import sys, pathlib
+          m = pathlib.Path(sys.argv[1])
+          nir = m / 'src/compiler/nir/meson.build'
+          t = nir.read_text()
+          assert 'with_nir_headers_only = (' in t
+          nir.write_text(t.replace('with_nir_headers_only = (', 'with_nir_headers_only = false and (', 1))
+          pan = m / 'src/panfrost/meson.build'
+          pan.write_text(pan.read_text() + '''
+          a5_t720_copy_shader = executable(
+            'a5_t720_copy_shader',
+            files('a5_t720_copy_shader.c'),
+            c_args : [c_msvc_compat_args, no_override_init_args, compile_args_panfrost],
+            include_directories : [inc_include, inc_src, inc_panfrost],
+            dependencies : [idep_nir, idep_mesautil, libpanfrost_dep],
+            link_with : [libpanfrost_compiler],
+            build_by_default : false,
+          )
+          ''')
+          PY
+          cp tools/a5xelte-gpu/gen-t720-copy-shader.c "$M/src/panfrost/a5_t720_copy_shader.c"
+          (cd "$M" && CC=clang CXX=clang++ meson setup build-host -Dgallium-drivers= -Dvulkan-drivers= \
+            -Dplatforms= -Dglx=disabled -Degl=disabled -Dgles1=disabled -Dgles2=disabled -Dopengl=false \
+            -Dllvm=disabled -Dgbm=disabled -Dtools=panfrost -Dzstd=disabled)
+          ninja -C "$M/build-host" src/panfrost/a5_t720_copy_shader
+          echo "HOST_MESA=$M/build-host" >> "$GITHUB_ENV"
+
+      - name: A5MaliMetal provider bundle (T830 runtime encoders)
+        run: |
+          set -eux
+          sh userland/a5mali-metal/StockMetalPlugin/build_local.sh "$RUNNER_TEMP/out/plugin" \
+            --mesa-build "$HOST_MESA"
 
       - name: Collect
         if: always()

@@ -31,7 +31,7 @@ int main(int argc,char**argv){
  nir_store_output(&b,&t->def,nir_imm_int(&b,0),.base=0,.src_type=nir_type_float32,
   .io_semantics.location=FRAG_RESULT_DATA0,.io_semantics.num_slots=1,.write_mask=15);
  nir_shader_gather_info(b.shader,nir_shader_get_entrypoint(b.shader));BITSET_SET(b.shader->info.textures_used,0);
- struct pan_compile_inputs in={.gpu_id=0x07201000,.is_blit=true,.no_idvs=true};
+ struct pan_compile_inputs in={.gpu_id=0x08300010 /* j5y17lte Mali-T830 r0p1 */,.is_blit=true,.no_idvs=true};
  struct pan_shader_info info={0};struct util_dynarray binary=UTIL_DYNARRAY_INIT;
  pan_preprocess_nir(b.shader,in.gpu_id);
  if(format==115)a5_lower_native_rgba16(b.shader);
