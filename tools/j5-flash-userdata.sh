@@ -6,6 +6,8 @@
 # without any error.
 #
 #   j5-flash-userdata.sh IMAGE [FIRST_CHUNK]
+# Only ever talk to the J5 (other phones may be attached over USB).
+export ANDROID_SERIAL="${ANDROID_SERIAL:-5200479dc6a79451}"
 set -eu
 img=$1
 first=${2:-0}

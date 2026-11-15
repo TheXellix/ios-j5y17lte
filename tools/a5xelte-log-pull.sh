@@ -1,5 +1,7 @@
 #!/bin/sh
 # TWRP only: read patch 0110's log area from SYSTEM p20 into private files.
+# Only ever talk to the J5 (other phones may be attached over USB).
+export ANDROID_SERIAL="${ANDROID_SERIAL:-5200479dc6a79451}"
 set -eu
 
 out=${1:?usage: tools/a5xelte-log-pull.sh /private/path/boot-log.txt}

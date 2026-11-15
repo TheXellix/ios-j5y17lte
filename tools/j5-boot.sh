@@ -3,6 +3,8 @@
 # TWRP and reboot.   j5-boot.sh KERNEL OUT.img [--flash] [EXTRA BOOT ARGS...]
 # Defaults: iPhone 8 userland ADT, 736 MiB RAM (loader RAM_MIB=736),
 # 32-sector eMMC transfers, 4 CPUs.
+# Only ever talk to the J5 (other phones may be attached over USB).
+export ANDROID_SERIAL="${ANDROID_SERIAL:-5200479dc6a79451}"
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 kernel=$1 out=$2; shift 2

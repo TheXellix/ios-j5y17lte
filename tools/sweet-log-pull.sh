@@ -3,6 +3,8 @@
 # OrangeFox recovery (fastboot boot recovery/recovery.img; adb root shell).
 #   tools/sweet-log-pull.sh [-s SERIAL] OUT.txt
 # Only reads: the last 1025 blocks (4 KiB) of the userdata partition.
+# Only ever talk to the J5 (other phones may be attached over USB).
+export ANDROID_SERIAL="${ANDROID_SERIAL:-5200479dc6a79451}"
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
