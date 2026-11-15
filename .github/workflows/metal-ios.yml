@@ -47,7 +47,7 @@ jobs:
 
       - name: Cache iOS toolchain outputs
         id: tc
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ runner.temp }}/out/air/metal2vulkan-ios
@@ -86,6 +86,22 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$MESA_URL"
           python3 userland/a5xelte-air-translation/ios/build_midgard_ios.py \
             "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$RUNNER_TEMP/out/midgard" --jobs 4
+
+      - name: Save iOS toolchain cache
+        if: steps.tc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/out/air/metal2vulkan-ios
+            ${{ runner.temp }}/out/air/metal2vulkan-host
+            ${{ runner.temp }}/out/air/build-manifest.json
+            ${{ runner.temp }}/out/spirv-val
+            ${{ runner.temp }}/out/midgard/midgard
+            ${{ runner.temp }}/out/midgard/midgard-generic602
+            ${{ runner.temp }}/out/midgard/build-manifest.json
+            ${{ runner.temp }}/mesa-26.2.4.tar.xz
+            ${{ runner.temp }}/m2v-profile.json
+          key: ios-toolchain-v1-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
 
       - name: Host Mesa template for the runtime encoders
         run: |
