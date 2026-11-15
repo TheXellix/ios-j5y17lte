@@ -1,0 +1,62 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index 7ddf485..0fc07ed 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -750,6 +750,49 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+         reinterpret_cast<uint64_t *>(header)[5] = fbVA; /* payload +40 */
+         uint32_t *fb = reinterpret_cast<uint32_t *>(
+             bytes + kA5G3DDataOffset + kA5G3DFragmentFBOffset);
++        if ((a5g3d_read32(gpu, 0) >> 16) == 0x830u) {
++            /*
++             * j5y17lte Mali-T830 (Panfrost arch v5): multi-target
++             * framebuffer descriptor instead of the T720 SFBD (Mesa
++             * genxml v5.xml, pan_desc.c pan_emit_fbd/pan_emit_rt and
++             * pan_emit_midgard_tiler with the tiler disabled):
++             *   +0   Local Storage (8 words)
++             *   +32  Framebuffer Parameters (6 words)
++             *   +56  Tiler Context (10 words)
++             *   +96  Tiler Weights (8 words, zero)
++             *   +128 RGB Render Target 0 (16 words)
++             * The fragment job points at it with bit 0 = MFBD and
++             * render target count - 1 = 0 in bits 2-5.
++             */
++            fb[1] = 31;                         /* no workgroup memory */
++            fb[8] = 0x000f000f;                 /* width-1, height-1 = 15 */
++            fb[9] = 0;                          /* bound min 0,0 */
++            fb[10] = 0x000f000f;                /* bound max 15,15 */
++            fb[11] = (2u << 6) | (8u << 9) | (1u << 24); /* tie-break -180in/0out,
++                                                  * 16x16 tile (log2 256),
++                                                  * 1 KiB colour buffer, 1 RT */
++            fb[12] = 1u << 16;                  /* Z internal D24, no ZS writes */
++            fb[13] = 0;                         /* Z clear 0.0 */
++            fb[14] = 512;                       /* polygon list: minimum header */
++            fb[15] = 4096;                      /* hierarchy mask: tiler disabled */
++            reinterpret_cast<uint64_t *>(fb)[8] = polygonVA;        /* polygon list */
++            reinterpret_cast<uint64_t *>(fb)[9] = polygonVA + 512;  /* body */
++            reinterpret_cast<uint64_t *>(fb)[10] = polygonVA;       /* heap start */
++            reinterpret_cast<uint64_t *>(fb)[11] = polygonVA;       /* heap end */
++            fb[32] = 1u << 26;                  /* internal format R8G8B8A8 */
++            fb[33] = 1u | (19u << 3) | (2u << 10) | (1u << 15) |
++                (0x688u << 16);                 /* write, RGBA8, linear,
++                                                  * dither, swizzle RGBA */
++            fb[34] = 0;                         /* no preload/unload */
++            reinterpret_cast<uint64_t *>(fb)[20] = pixelsVA;        /* writeback base */
++            fb[42] = scanout ? kA5G3DScanoutStride : 64;           /* row stride */
++            fb[43] = (scanout ? kA5G3DScanoutStride : 64) * 16;    /* surface stride */
++            for (unsigned i = 0; i < 4; ++i)
++                fb[44 + i] = scanout ? kA5G3DScanoutGreen : kA5G3DFragmentRed;
++            reinterpret_cast<uint64_t *>(header)[5] = fbVA | 1u;  /* MFBD, 1 RT */
++            IOLog("J5 G3D: T830 MFBD fragment fixture at %llx (RT base %llx stride %u)\n",
++                fbVA, pixelsVA, fb[42]);
++        } else {
+         fb[1] = 31;           /* LOCAL_STORAGE: no workgroup memory */
+         fb[8] = 0xb84da201;   /* RGBA8, identity swizzle, linear, clear/write */
+         fb[9] = 0x00141000;   /* tie-break 2 and default ZS D24S8 */
+@@ -768,6 +811,7 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+         uint32_t *polygon = reinterpret_cast<uint32_t *>(
+             bytes + kA5G3DDataOffset + kA5G3DPolygonListOffset);
+         polygon[128] = 0xa0000000; /* Mesa T720 empty-list body magic */
++        }
+         if (scanout) {
+             IOLog("A5XELTE G3D: scanout target phys=%llx x=%u y=%u stride=%u pages=%u\n",
+                 kA5G3DScanoutPixelPhys, kA5G3DScanoutX, kA5G3DScanoutY,

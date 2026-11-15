@@ -117,3 +117,8 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   back), the private WRITE_VALUE job completes through AS0 in 65 us with
   header DONE, no MMU/GPU fault and both readback words correct.
 - patch j5 0016: scanout clear test (a5gpu=5) at the J5 panel centre.
+- boot 16 (patch j5 0016, a5gpu=5): the fragment clear fails with JS status
+  0x58 DATA_INVALID_FAULT (job IRQ fail bit 16): the A5 fixture builds a T720
+  SFBD (Panfrost arch v4); the T830 is arch v5 and needs an MFBD.
+- patch j5 0017: T830 MFBD fixture (Mesa genxml v5: local storage, parameters,
+  disabled tiler context, RGB render target 0; framebuffer pointer bit 0).
