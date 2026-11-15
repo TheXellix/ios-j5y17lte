@@ -137,3 +137,6 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
 - patch j5 0020: second fence clear colour at the MFBD RT clear words; T830
   texture self-test (a5gpu=7): Mesa-generated v5 fixture (tools/j5-gpu), MFBD
   with the tiler active, GPU model flag from GPU_ID.
+- 2026-11-15 boot 22 (patch j5 0020, a5gpu=7): first T830 shader. Tiler job (slot
+  1) DONE in 0.2 ms, fragment job (slot 0) DONE in 0.15 ms; the Mesa-compiled
+  Midgard copy shader sampled the red texture over a black clear: 256/256.
