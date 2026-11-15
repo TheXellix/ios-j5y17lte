@@ -1,0 +1,87 @@
+name: metal-ios
+
+# Builds the on-device Metal/Mali toolchain for the j5y17lte (Mali-T830):
+# metal2vulkan (AIR -> SPIR-V), SPIRV-Tools spirv-val, the Mesa 26.2.4
+# Midgard backend and the A5MaliMetal provider bundle, all arm64 iOS 16.
+# Only open-source inputs: no Apple shaders, captures or registries.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [j5y17lte]
+    paths:
+      - "userland/**"
+      - ".github/workflows/metal-ios.yml"
+
+concurrency:
+  group: metal-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  M2V_REPO: https://github.com/steelbrain/metal2vulkan
+  M2V_PIN: a2c440b8bcdcf20d34aa1694b61ae22c2a7ea68b
+  MESA_URL: https://archive.mesa3d.org/mesa-26.2.4.tar.xz
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          set -eux
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          python3 -m venv "$RUNNER_TEMP/venv"
+          . "$RUNNER_TEMP/venv/bin/activate"
+          pip install meson ninja mako pyyaml packaging
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-ios
+
+      - name: metal2vulkan (host + iOS)
+        run: |
+          set -eux
+          git clone "$M2V_REPO" "$RUNNER_TEMP/m2v"
+          git -C "$RUNNER_TEMP/m2v" checkout --detach "$M2V_PIN"
+          (cd "$RUNNER_TEMP/m2v" && cargo fetch --locked)
+          python3 userland/a5xelte-air-translation/ios/build_air_no_timeout.py \
+            "$RUNNER_TEMP/m2v" "$RUNNER_TEMP/out/air"
+
+      - name: SPIRV-Tools spirv-val (iOS)
+        run: |
+          set -eux
+          python3 userland/a5xelte-air-translation/ios/build_spirv_tools_ios.py \
+            --fetch --work-dir "$RUNNER_TEMP/spirv" --output "$RUNNER_TEMP/out/spirv-val"
+
+      - name: Mesa Midgard backend (iOS)
+        run: |
+          set -eux
+          curl -fsSL -o "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$MESA_URL"
+          python3 userland/a5xelte-air-translation/ios/build_midgard_ios.py \
+            "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$RUNNER_TEMP/out/midgard" --jobs 4
+
+      - name: A5MaliMetal provider bundle
+        run: |
+          set -eux
+          sh userland/a5mali-metal/StockMetalPlugin/build_local.sh "$RUNNER_TEMP/out/plugin"
+
+      - name: Collect
+        if: always()
+        run: |
+          set -x
+          mkdir -p artifact
+          for d in air midgard plugin; do
+            [ -d "$RUNNER_TEMP/out/$d" ] && rsync -a --exclude source --exclude cargo-target \
+              --exclude src --exclude build "$RUNNER_TEMP/out/$d" artifact/ || true
+          done
+          cp "$RUNNER_TEMP/out/spirv-val" artifact/ 2>/dev/null || true
+          find artifact -maxdepth 3 -type f | head -100
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: metal-ios
+          path: artifact
