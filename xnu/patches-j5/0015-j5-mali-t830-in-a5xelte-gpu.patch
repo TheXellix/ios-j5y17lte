@@ -1,0 +1,131 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index fae6e35..f4d75cb 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -22,6 +22,7 @@
+ #include "A5XELTEGPUPoll.h"
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
+ #include <vm/memory_types.h>
+ #include <arm/memory_types.h>
+ #include "A5XELTEGPUQueue.h"
+@@ -113,6 +114,26 @@ struct A5G3DWriteValueJob {
+ } __attribute__((packed));
+ static_assert(sizeof(A5G3DWriteValueJob) == 48, "Mali job descriptor size");
+ 
++
++/* j5y17lte (Exynos7870, Mali-T830): ADT /j5-gpu selects the J5 PMU/CMU layout.
++ * S-Boot leaves pd-g3d on and the G3D clocks at its own OPP, so the A5's
++ * BUCK4 and divider sequences are skipped and the inherited clock is kept. */
++static bool
++a5g3d_is_j5(uint64_t *pmuPd)
++{
++    DTEntry entry;
++    uint64_t const *reg;
++    unsigned int size;
++    if (SecureDTLookupEntry(NULL, "/j5-gpu", &entry) != kSuccess ||
++        SecureDTGetProperty(entry, "pmu-pd", (void const **)&reg, &size) != kSuccess ||
++        size < 16) {
++        return false;
++    }
++    if (pmuPd) {
++        *pmuPd = reg[0];
++    }
++    return true;
++}
+ static bool
+ a5g3d_power_cores(IOService *service, vm_offset_t gpu, vm_offset_t cmu)
+ {
+@@ -127,6 +148,11 @@ a5g3d_power_cores(IOService *service, vm_offset_t gpu, vm_offset_t cmu)
+         service->setProperty("A5G3DJobResult", "clock-or-core-mask-unverified");
+         return false;
+     }
++    const bool j5 = a5g3d_is_j5(NULL);
++    if (j5) {
++        IOLog("J5 G3D: keeping the S-Boot G3D clock (PLL/mux inherited)\n");
++        goto j5_quirks;
++    }
+     if (!a5xelte_gpu_prepare_buck4()) {
+         service->setProperty("A5G3DJobResult", "buck4-unverified");
+         return false;
+@@ -170,16 +196,21 @@ a5g3d_power_cores(IOService *service, vm_offset_t gpu, vm_offset_t cmu)
+     /* Released Panfrost T720 issues10797 and the pre-T760 attribute rule:
+      * establish only the model-specific required bits; preserve unrelated
+      * inherited configuration instead of importing another SoC's quirks. */
+-    if ((a5g3d_read32(gpu, 0) >> 16) != 0x720u) {
++j5_quirks:
++    const uint32_t product = a5g3d_read32(gpu, 0) >> 16;
++    if (product != 0x720u && !(j5 && product == 0x830u)) {
+         service->setProperty("A5G3DJobResult", "shader-quirk-model-mismatch");
+         return false;
+     }
+-    const uint32_t shaderRequired = (1u << 18) | (1u << 25);
++    /* Panfrost panfrost_gpu_init_quirks: T720 SC_LS_ATTR_CHECK_DISABLE (18)
++     * + SC_ENABLE_TEXGRD_FLAGS (25); 0x750 <= id < 0x880 (T830)
++     * SC_LS_ALLOW_ATTR_TYPES (16). */
++    const uint32_t shaderRequired = product == 0x830u ? (1u << 16) : ((1u << 18) | (1u << 25));
+     const uint32_t shaderOld = a5g3d_read32(gpu, 0xf04);
+     a5g3d_write32(gpu, 0xf04, shaderOld | shaderRequired);
+     __sync_synchronize();
+     const uint32_t shaderConfigured = a5g3d_read32(gpu, 0xf04);
+-    IOLog("A5XELTE G3D: T720 shader config old=%08x readback=%08x required=%08x\n",
++    IOLog("A5XELTE G3D: T%03x shader config old=%08x readback=%08x required=%08x\n", product,
+         shaderOld, shaderConfigured, shaderRequired);
+     if ((shaderConfigured & shaderRequired) != shaderRequired) {
+         service->setProperty("A5G3DJobResult", "t720-shader-quirk-readback-failed");
+@@ -848,12 +879,16 @@ a5g3d_probe_existing_power(IOService *service, int mode,
+ {
+     runtimeGPU = 0;
+     const bool runJob = mode >= 3;
+-    vm_offset_t pmu = ml_io_map_unmappable(0x10464000, 0x1000, VM_WIMG_IO);
++    uint64_t j5Pd = 0;
++    const bool j5 = a5g3d_is_j5(&j5Pd);
++    /* A5: PMU 0x10464000 + 0x64; J5: pd-g3d 0x10484000 + 0x4 (STATUS). */
++    const vm_offset_t pmuStatus = j5 ? 0x4 : 0x64;
++    vm_offset_t pmu = ml_io_map_unmappable(j5 ? (vm_offset_t)j5Pd : 0x10464000, 0x1000, VM_WIMG_IO);
+     if (!pmu) {
+         service->setProperty("A5G3DProbeResult", "pmu-map-failed");
+         return;
+     }
+-    uint32_t power = a5g3d_read32(pmu, 0x64);
++    uint32_t power = a5g3d_read32(pmu, pmuStatus);
+     service->setProperty("A5G3DPMUStatus", static_cast<uint64_t>(power), 32);
+     if ((power & 0xf) != 0xf) {
+         service->setProperty("A5G3DProbeResult", "power-off");
+@@ -868,13 +903,15 @@ a5g3d_probe_existing_power(IOService *service, int mode,
+         ml_io_unmap(pmu, 0x1000);
+         return;
+     }
+-    uint32_t gate0 = a5g3d_read32(cmu, 0x800);
+-    uint32_t gate1 = a5g3d_read32(cmu, 0x900);
++    /* J5 CMU_G3D: CLK_ENABLE_CLK_G3D_BUS 0x804 (bits 0-1), _APB 0x808 (bit 0). */
++    uint32_t gate0 = a5g3d_read32(cmu, j5 ? 0x804 : 0x800);
++    uint32_t gate1 = a5g3d_read32(cmu, j5 ? 0x808 : 0x900);
+     service->setProperty("A5G3DGate0", static_cast<uint64_t>(gate0), 32);
+     service->setProperty("A5G3DGate1", static_cast<uint64_t>(gate1), 32);
+     /* The native Linux clk enable path sets bits 0, 1 and 4 in both banks. */
+-    if ((gate0 & 0x13) != 0x13 || (gate1 & 0x13) != 0x13 ||
+-        (a5g3d_read32(pmu, 0x64) & 0xf) != 0xf) {
++    if ((j5 ? ((gate0 & 0x3) != 0x3 || (gate1 & 0x1) != 0x1)
++             : ((gate0 & 0x13) != 0x13 || (gate1 & 0x13) != 0x13)) ||
++        (a5g3d_read32(pmu, pmuStatus) & 0xf) != 0xf) {
+         service->setProperty("A5G3DProbeResult", "clock-gated");
+         IOLog("A5XELTE G3D: clock gate off (%08x/%08x); GPU aperture untouched\n",
+             gate0, gate1);
+@@ -896,11 +933,13 @@ a5g3d_probe_existing_power(IOService *service, int mode,
+     uint32_t product = id >> 16;
+     service->setProperty("A5G3DGPUId", static_cast<uint64_t>(id), 32);
+     service->setProperty("A5G3DProduct", static_cast<uint64_t>(product), 32);
+-    service->setProperty("A5G3DProbeResult", product == 0x720 ? "mali-t720" : "unexpected-id");
++    const bool knownGPU = product == 0x720 || (j5 && product == 0x830);
++    service->setProperty("A5G3DProbeResult", product == 0x720 ? "mali-t720" :
++        (knownGPU ? "mali-t830" : "unexpected-id"));
+     IOLog("A5XELTE G3D: passive GPU_ID=%08x product=%04x (expected 0720); %s\n",
+         id, product, runJob ? "offscreen test requested" : "no GPU jobs");
+     bool completed = false;
+-    if (runJob && product == 0x720)
++    if (runJob && knownGPU)
+         completed = a5g3d_try_private_job(service, gpu, cmu, storage,
+             mode >= 4, mode == 5, mode == 6, mode == 7 || mode == 8);
+     if (mode == 8 && completed)

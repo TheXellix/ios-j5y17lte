@@ -108,3 +108,7 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   2.2 GB read in ~9 min (re-reads under a 512 MiB RAM window).
 - boot 14: RAM window 736 MiB (loader RAM_MIB=736, ADT dram-size,
   ends 0xae000000 below mfc_nfw) and a5emmc_blocks=32.
+- boot 14 (736 MiB, a5emmc_blocks=32): UI in ~3 min (was ~9); eMMC 13.7 MB/s
+  busy (was 4.5), max request 27 ms (was 407), no errors.
+- patch j5 0015: A5XELTEGPU accepts the J5 Mali-T830 (pd-g3d/CMU_G3D gates,
+  inherited clock, SC_LS_ALLOW_ATTR_TYPES quirk); ADT gpu nub; tools/j5-boot.sh.

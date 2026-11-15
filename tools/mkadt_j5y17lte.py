@@ -110,7 +110,16 @@ def build(model='iphone8plus', ram_mib=512):
         ('canvas-width', mkadt.u32(m['width'])),
         ('canvas-height', mkadt.u32(m['height'])),
     ]))
-    # No GPU nub: the A5 Mali-T720 stage is not ported to the J5 Mali-T830.
+    # Mali-T830 nub for the A5XELTEGPU service (IONameMatch kept from the A5;
+    # J5 addresses relative to arm-io 0x10000000). The service stays off
+    # unless a5gpu=N is on the command line (patch j5 0015).
+    arm_io.children.append(mkadt.node('gpu', [
+        ('device_type', mkadt.cstr('gpu')),
+        ('compatible', mkadt.cstr('samsung,exynos7580-mali')),
+        ('reg', mkadt.u64(0x01400000, 0x5000)),
+        ('cmu-reg', mkadt.u64(0x01460000, 0x1000)),
+        ('pmu-reg', mkadt.u64(0x00484000, 0x1000)),
+    ]))
     root.children = [n for n in root.children if n.prop('name') not in
                      (mkadt.cstr('sweet-fbcon'), mkadt.cstr('sweet-ufs'))]
     root.children.append(mkadt.node('a5xelte-fbcon', [
