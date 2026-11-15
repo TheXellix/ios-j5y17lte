@@ -38,8 +38,12 @@ MODELS = {
 }
 
 
-def build(model='iphone8plus'):
+def build(model='iphone8plus', ram_mib=512):
     m = MODELS[model]
+    # XNU RAM window from 0x80000000; must match the loader's RAM_MIB. 736 MiB
+    # ends at 0xae000000, below the J5 mfc_nfw/mfc_fw (0xae600000) and modem_if
+    # (0xb0000000) reservations.
+    assert ram_mib in (512, 736)
     # The donor's optional /product is D22AP-specific Apple metadata.
     root = mkadt.build(seed=os.urandom(64), qemu=True, donor_product=False)
     set_prop(root, 'compatible', mkadt.cstr('samsung,j5y17lte') +
@@ -51,7 +55,7 @@ def build(model='iphone8plus'):
     set_prop(buttons, 'button-names', b''.join(mkadt.cstr(name) for name in
                                        ('volup', 'voldown', 'hold', 'home')))
     set_prop(chosen, 'dram-base', mkadt.u64(0x80000000))
-    set_prop(chosen, 'dram-size', mkadt.u64(0x20000000))
+    set_prop(chosen, 'dram-size', mkadt.u64(ram_mib << 20))
     set_prop(chosen, 'firmware-version', mkadt.cstr('j5y17lte-entry'))
     set_prop(chosen, 'system-firmware-version', mkadt.cstr('j5y17lte-entry'))
     cpus = child(root, 'cpus')
@@ -185,7 +189,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--model', choices=sorted(MODELS), default='iphone8plus')
+    parser.add_argument('--ram-mib', type=int, choices=(512, 736), default=512)
     args = parser.parse_args()
-    blob = adt.serialize(build(args.model))
+    blob = adt.serialize(build(args.model, args.ram_mib))
     args.output.write_bytes(blob)
     print(f'{args.output}: {len(blob)} bytes')

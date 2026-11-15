@@ -100,3 +100,11 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   presented layer scaled straight into the panel (no uncached canvas pass),
   HID and touch target size from the ADT. tools/mkadt_j5y17lte.py --model
   iphone8 selects iPhone10,4 / D201AP, display-scale 2, 750x1334.
+- 2026-11-15 boot 12/13 (iPhone 8 root, 750x1334): first boot stuck on the
+  Apple logo; second boot (kernel run 14) reaches the UI in ~9 min.
+  Mali-T830: S-Boot leaves pd-g3d on (status 0x3000f) and the G3D clocks
+  enabled; GPU_ID 0x08300010 (T830 r0p1), one shader core, one L2, one
+  tiler. eMMC: busy ~29.7 s of every 30 s at ~4.5 MB/s single-sector PIO,
+  2.2 GB read in ~9 min (re-reads under a 512 MiB RAM window).
+- boot 14: RAM window 736 MiB (loader RAM_MIB=736, ADT dram-size,
+  ends 0xae000000 below mfc_nfw) and a5emmc_blocks=32.
