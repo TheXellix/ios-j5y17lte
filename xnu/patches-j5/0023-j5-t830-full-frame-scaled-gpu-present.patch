@@ -1,0 +1,370 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index 8a0071c..532134c 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -122,6 +122,7 @@ static_assert(sizeof(A5G3DWriteValueJob) == 48, "Mali job descriptor size");
+  * BUCK4 and divider sequences are skipped and the inherited clock is kept. */
+ /* Set by the probe from GPU_ID: selects T830 (Panfrost v5) fixtures. */
+ static bool gA5G3DIsT830 = false;
++bool a5g3d_is_t830(void) { return gA5G3DIsT830; }
+ 
+ static bool
+ a5g3d_is_j5(uint64_t *pmuPd)
+@@ -1050,9 +1051,11 @@ a5g3d_probe_existing_power(IOService *service, int mode,
+     if (runJob && knownGPU)
+         completed = a5g3d_try_private_job(service, gpu, cmu, storage,
+             mode >= 4, mode == 5, mode == 6, mode == 7 || mode == 8);
+-    if (mode == 8 && completed)
++    /* The downsample and shader-suite self-tests use T720 (v4 SFBD)
++     * descriptors; the T830 runtime uses only the verified v5 fixture. */
++    if (mode == 8 && completed && !gA5G3DIsT830)
+         a5g3d_downsample4_selftest(service, gpu, storage);
+-    if (mode == 8 && completed && gA5G3DQueueState == 0)
++    if (mode == 8 && completed && gA5G3DQueueState == 0 && !gA5G3DIsT830)
+         a5g3d_shader_suite(service, gpu, storage);
+     if (mode == 8 && completed && gA5G3DQueueState == 0 &&
+         gA5G3DQueueOwner == service) {
+diff --git a/iokit/Kernel/arm/A5XELTEGPUFrameMap.cpp b/iokit/Kernel/arm/A5XELTEGPUFrameMap.cpp
+index 0d5e25a..e9844f0 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUFrameMap.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUFrameMap.cpp
+@@ -1,4 +1,5 @@
+-/* Bounded 1080x1920 BGRA resource mapping for the private Mali-T720 AS0.
++/* Bounded 750x1334 BGRA source and 720x1280 panel mapping for the private
++ * Mali-T830 AS0 (j5y17lte; originally 1080x1920 for the A5's T720).
+  * The existing 16-KiB descriptor fixture remains at 0x02000000. Four new
+  * L3 tables cover the source and four cover the panel, with no broad
+  * identity map and no user-provided GPU page-table entries.
+@@ -26,8 +27,8 @@ static const uint32_t kA5G3DBGRA = 0x42475241;
+ static_assert(kA5G3DFrameSourceBytes % kA5G3DPageBytes == 0 &&
+     kA5G3DFramePanelBytes % kA5G3DPageBytes == 0,
+     "both frame regions must end at page boundaries");
+-static_assert(kA5G3DSourcePages == 2040 &&
+-    kA5G3DPanelPages == 2025 &&
++static_assert(kA5G3DSourcePages == 1001 &&
++    kA5G3DPanelPages == 900 &&
+     kA5G3DSourcePages <= kA5G3DL3Entries * kA5G3DL3TablesPerFrame &&
+     kA5G3DPanelPages <= kA5G3DL3Entries * kA5G3DL3TablesPerFrame,
+     "four page tables must cover each bounded frame region");
+@@ -101,7 +102,7 @@ a5g3d_frame_geometry_valid(const SweetSurface *surface)
+         surface->offset == 0 && surface->planeCount == 0 &&
+         surface->bytesPerElement == 4 &&
+         surface->elementWidth == 1 && surface->elementHeight == 1 &&
+-        surface->allocSize >= kA5G3DFrameSourceBytes &&
++        surface->allocSize >= kA5G3DFrameSourceImageBytes &&
+         surface->memory->getLength() >= kA5G3DFrameSourceBytes &&
+         OSDynamicCast(IOBufferMemoryDescriptor, surface->memory) != nullptr;
+ }
+diff --git a/iokit/Kernel/arm/A5XELTEGPUFrameMap.h b/iokit/Kernel/arm/A5XELTEGPUFrameMap.h
+index f5e5bf0..0009217 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUFrameMap.h
++++ b/iokit/Kernel/arm/A5XELTEGPUFrameMap.h
+@@ -12,14 +12,21 @@
+ 
+ class SweetSurface;
+ 
+-static const uint32_t kA5G3DFrameWidth = 1080;
+-static const uint32_t kA5G3DFrameHeight = 1920;
+-static const uint32_t kA5G3DFrameSourceStride = 4352;
+-static const uint32_t kA5G3DFrameSourceBytes =
++/* j5y17lte (Mali-T830): the iPhone 8 canvas, 750x1334 BGRA at 3072-byte
++ * rows (CoreAnimation's swap surfaces), is scaled by the GPU onto the
++ * 720x1280 DECON panel (2880-byte rows). The source mapping rounds the
++ * last partial page up: 3072 * 1334 = 4,098,048 B -> 1001 pages. */
++static const uint32_t kA5G3DFrameWidth = 750;
++static const uint32_t kA5G3DFrameHeight = 1334;
++static const uint32_t kA5G3DFrameSourceStride = 3072;
++static const uint32_t kA5G3DFrameSourceBytes = 1001 * 4096;
++static const uint32_t kA5G3DFrameSourceImageBytes =
+     kA5G3DFrameHeight * kA5G3DFrameSourceStride;
+-static const uint32_t kA5G3DFramePanelStride = 4320;
++static const uint32_t kA5G3DFramePanelWidth = 720;
++static const uint32_t kA5G3DFramePanelHeight = 1280;
++static const uint32_t kA5G3DFramePanelStride = 2880;
+ static const uint32_t kA5G3DFramePanelBytes =
+-    kA5G3DFrameHeight * kA5G3DFramePanelStride;
++    kA5G3DFramePanelHeight * kA5G3DFramePanelStride;
+ static const uint64_t kA5G3DFrameSourceVA = 0x04000000ULL;
+ static const uint64_t kA5G3DFramePanelVA = 0x05000000ULL;
+ 
+diff --git a/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp b/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
+index e72526b..7e37c1c 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
+@@ -13,6 +13,7 @@
+ #include <IOKit/IOLib.h>
+ #include <pexpert/pexpert.h>
+ #include <libkern/c++/OSNumber.h>
++#include <libkern/c++/OSString.h>
+ #include "A5XELTEPresentBand.h"
+ 
+ static const uint32_t kData = 0x4000;
+@@ -33,66 +34,105 @@ word_at(uint8_t *bytes, uint32_t offset)
+     return reinterpret_cast<uint32_t *>(bytes + kData + offset);
+ }
+ 
++/*
++ * j5y17lte Mali-T830 (Mesa v5 MFBD): the boot-time private texture fixture
++ * (patch j5 0020, gen-t830-texture-fixture.c) sampled a 16x16 texture into
++ * a 16x16 target. Reuse its shader, renderer state, blend, sampler and
++ * attribute descriptors unchanged and retarget only geometry:
++ *   texture   0x700 (h-1)<<16|(w-1), surface 0x720 VA, 0x728 row stride,
++ *             0x72c surface stride (750x1334 IOSurface, 3072-byte rows)
++ *   position  0x880: four vec4 vertices in panel pixels (0..720, 0..1280)
++ *   varying   0x820 attribute buffer -> 0x8c0: the same vertices in source
++ *             texels (0..750, 0..1334); unnormalized nearest sampler, so
++ *             the interpolated coordinate scales 750x1334 onto 720x1280
++ *   viewport  0x91c scissor max 719,1279
++ *   MFBD      +0x100: fb[8]/fb[10] 719,1279; flat tiler (T830 has no
++ *             hierarchical tiling) with 1024x1024 bins, mask 0x1c7 as the
++ *             A5's T720 present: 1x2 bins, list 0xa00 (header 0x200);
++ *             RT base = panel VA, 2880-byte rows; opaque black clear
++ *   fragment  tile bounds 0..44, 0..79 (16x16 tiles)
++ */
++static const uint32_t kT830Dims = 0x000f000f;          /* fixture 16x16 */
++static const uint32_t kT830FullDims =
++    ((kA5G3DFrameHeight - 1) << 16) | (kA5G3DFrameWidth - 1);
++static const uint32_t kT830PanelMax =
++    ((kA5G3DFramePanelHeight - 1) << 16) | (kA5G3DFramePanelWidth - 1);
++
++static inline uint32_t
++f32bits(float value)
++{
++    union { float f; uint32_t u; } v;
++    v.f = value;
++    return v.u;
++}
++
+ static bool
+ prepare_full_frame_fixture(IOBufferMemoryDescriptor *backing,A5PresentBand band)
+ {
++    (void)band;
+     if (!backing || backing->getLength() < 0x10000 ||
+         !backing->getBytesNoCopy())
+         return false;
+     uint8_t *bytes = static_cast<uint8_t *>(backing->getBytesNoCopy());
+     uint32_t *fb = word_at(bytes, kFB);
+-    /* A5G3D's a5gpu=8 private texture startup fixture is required. Do not
+-     * guess shader or blend descriptors if a different probe mode ran. */
+-    const bool privateFixture = *word_at(bytes, 0x700) == 0x000f000f &&
++    /* Only the validated T830 texture fixture (or its retargeted form) may
++     * be patched; never guess shader or blend descriptors. */
++    const bool privateFixture = *word_at(bytes, 0x700) == kT830Dims &&
+         *word_at(bytes, 0x720) == 0x02000a00 &&
+-        *word_at(bytes, 0x728) == 64 &&
+-        *word_at(bytes, 0x72c) == 1024;
+-    const bool fullFrameFixture = *word_at(bytes, 0x700) == 0x077f0437 &&
+-        *word_at(bytes, 0x720) == 0x04000000 &&
+-        *word_at(bytes, 0x728) == 4352 &&
+-        *word_at(bytes, 0x72c) == 8355840;
+-    if (fb[8] != 0xb84da201 || fb[9] != 0x00141000 ||
++        *word_at(bytes, 0x728) == 64 && *word_at(bytes, 0x72c) == 1024;
++    const bool fullFrameFixture = *word_at(bytes, 0x700) == kT830FullDims &&
++        *word_at(bytes, 0x720) == (uint32_t)kA5G3DFrameSourceVA &&
++        *word_at(bytes, 0x728) == kA5G3DFrameSourceStride &&
++        *word_at(bytes, 0x72c) == kA5G3DFrameSourceImageBytes;
++    if (*word_at(bytes, 0x610) != 0x00020400 ||      /* RSD from 0020 */
++        fb[33] != (1u | (19u << 3) | (2u << 10) | (1u << 15) | (0x688u << 16) | (1u << 31)) ||
+         (!privateFixture && !fullFrameFixture))
+         return false;
+ 
+-    /* Generated offline from the same Mesa v4 fixture, changing only
+-     * texture geometry, four quad vertices and the viewport scissor. */
+-    static const struct { uint16_t offset; uint32_t value; } changes[] = {
+-        { 0x700, 0x077f0437 }, /* texture width/height minus one */
+-        { 0x720, 0x04000000 }, /* source GPU VA */
+-        { 0x728, 0x00001100 }, /* 4352-byte source row */
+-        { 0x72c, 0x007f8000 }, /* 8,355,840-byte source */
+-        { 0x890, 0x44870000 }, /* 1080.0f */
+-        { 0x8a4, 0x44f00000 }, /* 1920.0f */
+-        { 0x8b0, 0x44870000 },
+-        { 0x8b4, 0x44f00000 },
+-        { 0x91c, 0x077f0437 }, /* viewport max 1079,1919 */
+-    };
+-    for (const auto &change : changes)
+-        *word_at(bytes, change.offset) = change.value;
++    *word_at(bytes, 0x700) = kT830FullDims;
++    *reinterpret_cast<uint64_t *>(word_at(bytes, 0x720)) = kA5G3DFrameSourceVA;
++    *word_at(bytes, 0x728) = kA5G3DFrameSourceStride;
++    *word_at(bytes, 0x72c) = kA5G3DFrameSourceImageBytes;
+ 
+-    fb[11] = 0x077f0437; /* framebuffer max pixel coordinate */
+-    reinterpret_cast<uint64_t *>(fb)[10] = kA5G3DFramePanelVA;
+-    fb[22] = kA5G3DFramePanelStride;
+-    /* Mesa pan_tiler.c flat tiles are 8<<exp: 0x1c7 means 1024x1024.
+-     * Two bins each way require 0x200 + 4*0x200 = 0xA00 bytes. */
+-    fb[48] = 0x0a00;
+-    fb[49] = 0x01c7;
++    const float pw = (float)kA5G3DFramePanelWidth, ph = (float)kA5G3DFramePanelHeight;
++    const float sw = (float)kA5G3DFrameWidth, sh = (float)kA5G3DFrameHeight;
++    const float position[16] = {0,0,0,1, pw,0,0,1, 0,ph,0,1, pw,ph,0,1};
++    const float texel[16] = {0,0,0,1, sw,0,0,1, 0,sh,0,1, sw,sh,0,1};
++    for (unsigned i = 0; i < 16; ++i) {
++        *word_at(bytes, 0x880 + 4 * i) = f32bits(position[i]);
++        *word_at(bytes, 0x8c0 + 4 * i) = f32bits(texel[i]);
++    }
++    /* Attribute buffer 0 (varying): pointer | type 1 (linear), stride 16, size 64. */
++    *reinterpret_cast<uint64_t *>(word_at(bytes, 0x820)) = (kPrivateVA + 0x8c0) | 1u;
++    *word_at(bytes, 0x828) = 16;
++    *word_at(bytes, 0x82c) = 64;
++    *word_at(bytes, 0x918) = 0;
++    *word_at(bytes, 0x91c) = kT830PanelMax;
++
++    fb[8] = kT830PanelMax;
++    fb[10] = kT830PanelMax;
++    fb[14] = 0x0a00;                    /* polygon list size */
++    fb[15] = 0x01c7;                    /* flat 1024x1024 bins */
++    const uint64_t polygonVA = kPrivateVA + kPolygon;
++    reinterpret_cast<uint64_t *>(fb)[8] = polygonVA;
++    reinterpret_cast<uint64_t *>(fb)[9] = polygonVA + 0x200;
++    reinterpret_cast<uint64_t *>(fb)[10] = kPrivateVA + 0x3000;
++    reinterpret_cast<uint64_t *>(fb)[11] = kPrivateVA + 0x4000;
++    reinterpret_cast<uint64_t *>(fb)[20] = kA5G3DFramePanelVA;
++    fb[42] = kA5G3DFramePanelStride;
++    fb[43] = kA5G3DFramePanelBytes;
+     for (unsigned i = 0; i < 4; ++i)
+-        fb[32 + i] = 0xff000000;
+-    reinterpret_cast<uint64_t *>(fb)[27] = kPrivateVA + 0x3000;
+-    reinterpret_cast<uint64_t *>(fb)[28] = kPrivateVA + 0x4000;
++        fb[44 + i] = 0xff000000;
++
+     uint32_t *fragment = word_at(bytes, 0);
++    bzero(fragment, 16);
+     fragment[4] = 0x00020013;
+-    /* Release Panfrost FRAGMENT_JOB payload bounds are 16x16 tile indices,
+-     * independent of the pixel bounds stored in the framebuffer. */
+     fragment[8] = 0;
+-    fragment[9] = (1079u >> 4) | ((1919u >> 4) << 16);
+-    if(!a5present_scissor(word_at(bytes,0x900),fragment,1080,1920,band))return false;
++    fragment[9] = ((kA5G3DFramePanelWidth - 1) >> 4) |
++        (((kA5G3DFramePanelHeight - 1) >> 4) << 16);
+     bzero(word_at(bytes, kPolygon), 4096);
+     word_at(bytes, kPolygon)[128] = 0xa0000000;
+     bzero(word_at(bytes, 0x300), 16);
+-    bzero(fragment, 16);
+     __sync_synchronize();
+     return true;
+ }
+@@ -111,16 +151,13 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+     if (!a5g3d_queue_acquire_runtime(&probeOwner, &probeToken,
+         &probeBacking, &probeGPU))
+         return kA5G3DFramePresentCPUFallback;
+-    OSNumber *verified = OSDynamicCast(OSNumber,
+-        probeOwner->getProperty("A5G3DLiveSurfacePixels"));
+-    OSNumber *sampleID = OSDynamicCast(OSNumber,
+-        probeOwner->getProperty("A5G3DLiveSurfaceID"));
+-    /* The sample validates this fixed BGRA texture descriptor/shader path.
+-     * It need not be the same swap buffer: frame_map_begin independently
+-     * validates every new IOSurface's exact geometry and physical pages. */
+-    const bool sampleOK = source && verified && sampleID &&
+-        verified->unsigned32BitValue() == 256 &&
+-        sampleID->unsigned32BitValue() != 0;
++    /* j5y17lte: the boot T830 texture fixture must have sampled 256/256
++     * texels through this exact shader/descriptor set (patch j5 0020).
++     * frame_map_begin independently validates every IOSurface. */
++    OSString *job = OSDynamicCast(OSString,
++        probeOwner->getProperty("A5G3DJobResult"));
++    const bool sampleOK = source && job &&
++        job->isEqualTo("private-texture-sampled");
+     a5g3d_queue_release(probeOwner, probeToken);
+     probeOwner->release();
+     if (!sampleOK)
+@@ -138,7 +175,7 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+     A5G3DFramePresentStatus result = kA5G3DFramePresentCPUFallback;
+     do {
+         A5PresentBand band={0,kA5G3DFrameHeight};
+-        int damage=0;PE_parse_boot_argn("a5fb_damage",&damage,sizeof(damage));
++        int damage=0; /* j5: scaled output, no row-damage bands */
+         const void *pixels=nullptr;
+         bool shadowReady=false;
+         if(damage==1){
+@@ -149,7 +186,7 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+             shadowReady=gPanelShadow && pixels && source->memory->performOperation(
+                 kIOMemoryIncoherentIOFlush,0,kA5G3DFrameSourceBytes)==kIOReturnSuccess;
+             if(shadowReady)shadowReady=a5present_band(pixels,source->allocSize,source->bytesPerRow,
+-                gPanelShadow,kA5G3DFramePanelBytes,1080,1920,gPanelShadowValid,&band);
++                gPanelShadow,kA5G3DFramePanelBytes,kA5G3DFrameWidth,kA5G3DFrameHeight,gPanelShadowValid,&band);
+             if(!shadowReady){gPanelShadowValid=false;band={0,kA5G3DFrameHeight};}
+             if(shadowReady && band.first==band.end){
+                 ++gUnchangedFrames;result=kA5G3DFramePresentUnchanged;
+@@ -209,14 +246,14 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+                     source->id, tilerDone.fence, fragmentDone.fence,
+                     gPresentedFrames);
+             if (gPresentedFrames == 1)
+-                IOLog("A5XELTE G3D: full-panel tile bounds=0..67,0..119; completion is not pixel readback\n");
++                IOLog("A5XELTE G3D: T830 full-panel 750x1334 -> 720x1280, tile bounds 0..44,0..79\n");
+             result = kA5G3DFramePresentCompleted;
+-            const uint64_t transferred=(uint64_t)1080*(band.end-band.first)*4;
++            const uint64_t transferred=kA5G3DFramePanelBytes;
+             if(copiedBytes)*copiedBytes=transferred;
+             if(shadowReady){
+-                a5present_remember(pixels,source->bytesPerRow,gPanelShadow,1080,band);
++                a5present_remember(pixels,source->bytesPerRow,gPanelShadow,kA5G3DFrameWidth,band);
+                 gPanelEpoch=panelEpoch;gPanelShadowValid=true;
+-                if(band.first || band.end!=1920)++gBandFrames;
++                if(band.first || band.end!=kA5G3DFrameHeight)++gBandFrames;
+                 gBandBytes+=transferred;
+                 if(++gComparedFrames<=8 || !(gComparedFrames&63))IOLog(
+                     "A5XELTE G3D present: compared=%llu partial=%llu unchanged=%llu bytes=%llu rows=%u..%u\n",
+diff --git a/iokit/Kernel/arm/A5XELTEGPUResources.cpp b/iokit/Kernel/arm/A5XELTEGPUResources.cpp
+index 3212b57..f9c9763 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUResources.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUResources.cpp
+@@ -162,6 +162,8 @@ a5g3d_resource_stage_bgra16(const A5G3DImportedSurface *resource,
+     return kA5G3DResourceReady;
+ }
+ 
++bool a5g3d_is_t830(void);
++
+ void
+ a5g3d_resource_probe_swap(uint32_t surfaceID)
+ {
+@@ -173,7 +175,9 @@ a5g3d_resource_probe_swap(uint32_t surfaceID)
+     if (gA5G3DSwapProbeMode == 0) {
+         int mode = 0;
+         PE_parse_boot_argn("a5gpu", &mode, sizeof(mode));
+-        gA5G3DSwapProbeMode = mode == 8 ? 2u : 1u;
++        /* j5y17lte T830: the full-frame present checks the boot texture
++         * fixture itself; this T720 live-tile probe would rewrite it. */
++        gA5G3DSwapProbeMode = (mode == 8 && !a5g3d_is_t830()) ? 2u : 1u;
+     }
+     if (gA5G3DSwapProbeMode != 2)
+         return;
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 5aa3d7d..33d2d3d 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -761,8 +761,10 @@ AppleCLCD::present(const uint8_t *rec, bool *complete)
+ 			*complete = false;
+ 		return 0;
+ 	}
+-	if (fGPUCopy && fPhys == 0x67000000ULL &&
+-	    fWidth == 1080 && fHeight == 1920 && fRowBytes == 4320 &&
++	/* j5y17lte: the 750x1334 iPhone 8 canvas is scaled by the Mali-T830
++	 * straight onto the 720x1280 panel (fJ5Panel), bypassing the canvas. */
++	if (fGPUCopy && fJ5Panel != 0 &&
++	    fWidth == 750 && fHeight == 1334 &&
+ 	    fOffX == 0 && fOffY == 0 && mask != 0 && mask < 16 &&
+ 	    (mask & (mask - 1)) == 0) {
+ 		uint32_t layer = 0;
+@@ -771,9 +773,9 @@ AppleCLCD::present(const uint8_t *rec, bool *complete)
+ 		const uint8_t *a = rec + 0x64 + 16 * layer;
+ 		const uint8_t *b = rec + 0xc4 + 16 * layer;
+ 		if (get32(a, 0) == 0 && get32(a, 4) == 0 &&
+-		    get32(a, 8) == 1080 && get32(a, 12) == 1920 &&
++		    get32(a, 8) == 750 && get32(a, 12) == 1334 &&
+ 		    get32(b, 0) == 0 && get32(b, 4) == 0 &&
+-		    get32(b, 8) == 1080 && get32(b, 12) == 1920) {
++		    get32(b, 8) == 750 && get32(b, 12) == 1334) {
+ 			SweetSurface *s = sweet_surface_copy(get32(rec,
+ 			    0x54 + 4 * layer));
+ 			if (s && s != fSurface) {
+@@ -786,7 +788,7 @@ AppleCLCD::present(const uint8_t *rec, bool *complete)
+ 				/* The panel mapping is write-combined (no cached CPU alias).
+ 				 * At terminal completion compare a bounded grid read-only. */
+ 				static uint32_t pixelReports = 0; /* framebuffer workloop */
+-				if (status == kA5G3DFramePresentCompleted && pixelReports < 8) {
++				if (status == kA5G3DFramePresentCompleted && pixelReports < 8 && !fJ5Panel) {
+ 					A5FramePixels pixels = {};
+ 					const bool sampled = a5frame_pixels(
+ 					    reinterpret_cast<const void *>(s->kernelAddress()),s->allocSize,
