@@ -183,3 +183,9 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   correct, very fluid, ~10-12 FPS by eye (the CoreAnimation software
   renderer is now the limit), boot still ~3 min. Metal is not available
   to iOS (no IOAcceleratorES / Metal device on the T830 yet).
+- 2026-11-15 boot 29 (run26, patch 0028, a5gpuclient=1 a5metal=1, no
+  provider installed yet): boots to the home screen; the opt-in stock Metal
+  discovery proxy (IOAcceleratorES) registers; the GPU present keeps
+  running (shown=256 by the end). Userland: metal2vulkan, spirv-val and the
+  Mesa Midgard backend build for iOS in CI; the five runtime encoders are
+  ported to v5 and compile; provider bundle + compiler package in progress.
