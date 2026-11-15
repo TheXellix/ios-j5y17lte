@@ -131,3 +131,9 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
 - 2026-11-15 boot 19 (patch j5 0019, a5gpu=4): first T830 render. The MFBD
   fragment clear writes 256/256 red pixels (readback ff0000ff), job DONE in
   92 us, no faults.
+- boot 20 (a5gpu=5): scanout clear job completes (1.35 ms). boot 21 (a5gpu=6):
+  fence 1 256/256, fence 2 0x58: the reuse writes the clear colour at the SFBD
+  offset fb[32], which is the MFBD RT format word; fixed in patch j5 0020.
+- patch j5 0020: second fence clear colour at the MFBD RT clear words; T830
+  texture self-test (a5gpu=7): Mesa-generated v5 fixture (tools/j5-gpu), MFBD
+  with the tiler active, GPU model flag from GPU_ID.

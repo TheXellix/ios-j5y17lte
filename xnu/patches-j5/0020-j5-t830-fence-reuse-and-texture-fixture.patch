@@ -1,0 +1,172 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index 8d3c637..8a0071c 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -120,6 +120,9 @@ static_assert(sizeof(A5G3DWriteValueJob) == 48, "Mali job descriptor size");
+ /* j5y17lte (Exynos7870, Mali-T830): ADT /j5-gpu selects the J5 PMU/CMU layout.
+  * S-Boot leaves pd-g3d on and the G3D clocks at its own OPP, so the A5's
+  * BUCK4 and divider sequences are skipped and the inherited clock is kept. */
++/* Set by the probe from GPU_ID: selects T830 (Panfrost v5) fixtures. */
++static bool gA5G3DIsT830 = false;
++
+ static bool
+ a5g3d_is_j5(uint64_t *pmuPd)
+ {
+@@ -618,6 +621,48 @@ a5g3d_reset_private_texture(IOBufferMemoryDescriptor *backing)
+     bzero(data, 0x4000);
+     uint32_t *header = reinterpret_cast<uint32_t *>(data);
+     header[4] = 0x00020013; /* fragment job index 2 */
++    if (gA5G3DIsT830) {
++        /* j5y17lte Mali-T830: MFBD (Mesa v5) with the tiler active for the
++         * textured quad; same polygon list/heap layout as the T720 SFBD
++         * below (no hierarchical tiling: mask 0, 4096-byte list, body +512,
++         * empty-body magic, heap at +0x3000..+0x4000). Clear black. */
++        reinterpret_cast<uint64_t *>(header)[5] =
++            (kA5G3DTestVA + kA5G3DFragmentFBOffset) | 1u;   /* MFBD, 1 RT */
++        uint32_t *fb = reinterpret_cast<uint32_t *>(data + kA5G3DFragmentFBOffset);
++        const uint64_t polygonVA = kA5G3DTestVA + kA5G3DPolygonListOffset;
++        fb[1] = 31;
++        fb[8] = 0x000f000f;
++        fb[10] = 0x000f000f;
++        fb[11] = (2u << 6) | (8u << 9) | (1u << 24);
++        fb[12] = 1u << 16;
++        fb[14] = 4096;                          /* polygon list size */
++        fb[15] = 0;                             /* hierarchy mask */
++        reinterpret_cast<uint64_t *>(fb)[8] = polygonVA;
++        reinterpret_cast<uint64_t *>(fb)[9] = polygonVA + 512;
++        reinterpret_cast<uint64_t *>(fb)[10] = kA5G3DTestVA + 0x3000;
++        reinterpret_cast<uint64_t *>(fb)[11] = kA5G3DTestVA + 0x4000;
++        fb[32] = 1u << 26;
++        fb[33] = 1u | (19u << 3) | (2u << 10) | (1u << 15) | (0x688u << 16) | (1u << 31);
++        reinterpret_cast<uint64_t *>(fb)[20] = kA5G3DTestVA + kA5G3DFragmentOutputOffset;
++        fb[42] = 64;
++        fb[43] = 64 * 16;
++        for (unsigned i = 0; i < 4; ++i)
++            fb[44 + i] = 0xff000000;
++        reinterpret_cast<uint32_t *>(data + kA5G3DPolygonListOffset)[128] = 0xa0000000;
++        static const struct { uint16_t offset; uint32_t word; } fixture830[] = {
++#include "A5XELTEGPUTextureFixtureT830.inc"
++        };
++        for (const auto &entry : fixture830)
++            *reinterpret_cast<uint32_t *>(data + entry.offset) = entry.word;
++        uint32_t *source = reinterpret_cast<uint32_t *>(data + 0xa00);
++        uint32_t *output = reinterpret_cast<uint32_t *>(
++            data + kA5G3DFragmentOutputOffset);
++        for (unsigned i = 0; i < kA5G3DFragmentPixels; ++i) {
++            source[i] = kA5G3DFragmentRed;
++            output[i] = 0x5a5a5a5a;
++        }
++        return true;
++    }
+     reinterpret_cast<uint64_t *>(header)[5] =
+         kA5G3DTestVA + kA5G3DFragmentFBOffset;
+     uint32_t *fb = reinterpret_cast<uint32_t *>(data + kA5G3DFragmentFBOffset);
+@@ -850,7 +895,8 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+             service->setProperty("A5G3DJobResult", "texture-reset-failed");
+             return false;
+         }
+-        IOLog("A5XELTE G3D: private T720 texture fixture ready; tiler first\n");
++        IOLog("A5XELTE G3D: private %s texture fixture ready; tiler first\n",
++            gA5G3DIsT830 ? "T830 (v5 MFBD)" : "T720");
+     }
+     if (storage->performOperation(kIOMemoryIncoherentIOStore, 0,
+         kA5G3DDataOffset) != kIOReturnSuccess) {
+@@ -912,8 +958,11 @@ a5g3d_try_private_job(IOService *service, vm_offset_t gpu, vm_offset_t cmu,
+             header[i] = 0;
+         uint32_t *fb = reinterpret_cast<uint32_t *>(
+             bytes + kA5G3DDataOffset + kA5G3DFragmentFBOffset);
++        /* Clear colour: SFBD +128 (fb[32]); T830 MFBD render target
++         * word 12 (fb[44]); fb[32] there is the RT format word. */
++        const unsigned clearWord = (a5g3d_read32(gpu, 0) >> 16) == 0x830u ? 44 : 32;
+         for (unsigned i = 0; i < 4; ++i)
+-            fb[32 + i] = kA5G3DScanoutGreen;
++            fb[clearWord + i] = kA5G3DScanoutGreen;
+         for (unsigned i = 0; i < kA5G3DFragmentPixels; ++i)
+             pixels[i] = 0x5a5a5a5a;
+         complete = a5g3d_submit_fenced(service, gpu, storage, bytes,
+@@ -992,6 +1041,7 @@ a5g3d_probe_existing_power(IOService *service, int mode,
+     service->setProperty("A5G3DGPUId", static_cast<uint64_t>(id), 32);
+     service->setProperty("A5G3DProduct", static_cast<uint64_t>(product), 32);
+     const bool knownGPU = product == 0x720 || (j5 && product == 0x830);
++    gA5G3DIsT830 = j5 && product == 0x830;
+     service->setProperty("A5G3DProbeResult", product == 0x720 ? "mali-t720" :
+         (knownGPU ? "mali-t830" : "unexpected-id"));
+     IOLog("A5XELTE G3D: passive GPU_ID=%08x product=%04x (expected 0720); %s\n",
+diff --git a/iokit/Kernel/arm/A5XELTEGPUTextureFixtureT830.inc b/iokit/Kernel/arm/A5XELTEGPUTextureFixtureT830.inc
+new file mode 100644
+index 0000000..5a647b8
+--- /dev/null
++++ b/iokit/Kernel/arm/A5XELTEGPUTextureFixtureT830.inc
+@@ -0,0 +1,72 @@
++/* Generated from gen-t830-texture-fixture.c (Mesa 26.2.4, PAN_ARCH 5,
++ * Mali-T830 shader gpu_id 0x08300010) for j5y17lte. Nonzero descriptor
++ * words below the source texels, which are initialized separately. */
++    { 0x310, 0x0001100f },
++    { 0x320, 0x00000003 },
++    { 0x324, 0x28000000 },
++    { 0x328, 0x1803800a },
++    { 0x334, 0x00000003 },
++    { 0x340, 0x00000007 },
++    { 0x350, 0x02000880 },
++    { 0x360, 0x02000740 },
++    { 0x368, 0x02000780 },
++    { 0x378, 0x02000600 },
++    { 0x390, 0x02000820 },
++    { 0x398, 0x02000800 },
++    { 0x3a0, 0x02000900 },
++    { 0x3b0, 0x02000101 },
++    { 0x3b8, 0x3f800000 },
++    { 0x500, 0xc87a9835 },
++    { 0x504, 0x01403939 },
++    { 0x508, 0x00000030 },
++    { 0x510, 0x210b12d3 },
++    { 0x514, 0x00e43c60 },
++    { 0x520, 0x0822001d },
++    { 0x524, 0x841f0018 },
++    { 0x528, 0x4000027b },
++    { 0x52c, 0x0240ffae },
++    { 0x530, 0xc0a00000 },
++    { 0x534, 0x0000006f },
++    { 0x538, 0x0000ffff },
++    { 0x540, 0x0822001d },
++    { 0x544, 0x841f0018 },
++    { 0x548, 0x4000027b },
++    { 0x54c, 0x0240ffae },
++    { 0x550, 0xc0a00000 },
++    { 0x554, 0xfffffc6f },
++    { 0x558, 0x0000ffff },
++    { 0x600, 0x02000505 },
++    { 0x608, 0x00010001 },
++    { 0x60c, 0x00010000 },
++    { 0x610, 0x00020400 },
++    { 0x620, 0x0700ffff },
++    { 0x624, 0x00e00000 },
++    { 0x640, 0x00000a00 },
++    { 0x648, 0xf0122122 },
++    { 0x700, 0x000f000f },
++    { 0x708, 0x328bb688 },
++    { 0x710, 0x00000688 },
++    { 0x720, 0x02000a00 },
++    { 0x728, 0x00000040 },
++    { 0x72c, 0x00000400 },
++    { 0x740, 0x02000700 },
++    { 0x780, 0x00000003 },
++    { 0x788, 0x00000999 },
++    { 0x800, 0x2dea2200 },
++    { 0x820, 0x02000881 },
++    { 0x828, 0x00000010 },
++    { 0x82c, 0x00000040 },
++    { 0x88c, 0x3f800000 },
++    { 0x890, 0x41800000 },
++    { 0x89c, 0x3f800000 },
++    { 0x8a4, 0x41800000 },
++    { 0x8ac, 0x3f800000 },
++    { 0x8b0, 0x41800000 },
++    { 0x8b4, 0x41800000 },
++    { 0x8bc, 0x3f800000 },
++    { 0x900, 0xff800000 },
++    { 0x904, 0xff800000 },
++    { 0x908, 0x7f800000 },
++    { 0x90c, 0x7f800000 },
++    { 0x914, 0x3f800000 },
++    { 0x91c, 0x000f000f },
