@@ -45,7 +45,24 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add aarch64-apple-ios
 
+      - name: Cache iOS toolchain outputs
+        id: tc
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/out/air/metal2vulkan-ios
+            ${{ runner.temp }}/out/air/metal2vulkan-host
+            ${{ runner.temp }}/out/air/build-manifest.json
+            ${{ runner.temp }}/out/spirv-val
+            ${{ runner.temp }}/out/midgard/midgard
+            ${{ runner.temp }}/out/midgard/midgard-generic602
+            ${{ runner.temp }}/out/midgard/build-manifest.json
+            ${{ runner.temp }}/mesa-26.2.4.tar.xz
+            ${{ runner.temp }}/m2v-profile.json
+          key: ios-toolchain-v1-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
+
       - name: metal2vulkan (host + iOS)
+        if: steps.tc.outputs.cache-hit != 'true'
         run: |
           set -eux
           git clone "$M2V_REPO" "$RUNNER_TEMP/m2v"
@@ -53,14 +70,17 @@ jobs:
           (cd "$RUNNER_TEMP/m2v" && { [ -f Cargo.lock ] || cargo generate-lockfile; } && cargo fetch --locked)
           python3 userland/a5xelte-air-translation/ios/build_air_no_timeout.py \
             "$RUNNER_TEMP/m2v" "$RUNNER_TEMP/out/air"
+          cp "$(find "$RUNNER_TEMP/m2v" -path '*validation/profiles/vk12-floor.json' | head -1)" "$RUNNER_TEMP/m2v-profile.json"
 
       - name: SPIRV-Tools spirv-val (iOS)
+        if: steps.tc.outputs.cache-hit != 'true'
         run: |
           set -eux
           python3 userland/a5xelte-air-translation/ios/build_spirv_tools_ios.py \
             --fetch --work-dir "$RUNNER_TEMP/spirv" --output "$RUNNER_TEMP/out/spirv-val"
 
       - name: Mesa Midgard backend (iOS)
+        if: steps.tc.outputs.cache-hit != 'true'
         run: |
           set -eux
           curl -fsSL -o "$RUNNER_TEMP/mesa-26.2.4.tar.xz" "$MESA_URL"
@@ -110,7 +130,7 @@ jobs:
       - name: Shader compiler service package (T830)
         run: |
           set -eux
-          prof=$(find "$RUNNER_TEMP/m2v" -path '*validation/profiles/vk12-floor.json' | head -1)
+          prof="$RUNNER_TEMP/m2v-profile.json"
           python3 tools/j5-package-compiler.py \
             "$RUNNER_TEMP/out/air/metal2vulkan-ios" "$RUNNER_TEMP/out/midgard/midgard" \
             "$RUNNER_TEMP/out/midgard/midgard-generic602" "$RUNNER_TEMP/out/spirv-val" \
