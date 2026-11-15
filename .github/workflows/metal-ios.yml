@@ -78,8 +78,9 @@ jobs:
           m = pathlib.Path(sys.argv[1])
           nir = m / 'src/compiler/nir/meson.build'
           t = nir.read_text()
-          assert 'with_nir_headers_only = (' in t
-          nir.write_text(t.replace('with_nir_headers_only = (', 'with_nir_headers_only = false and (', 1))
+          # Tools-only builds otherwise link the NIR stub: force the full NIR.
+          i = t.index('\nif with_nir_headers_only')
+          nir.write_text(t[:i] + '\nwith_nir_headers_only = false' + t[i:])
           pan = m / 'src/panfrost/meson.build'
           pan.write_text(pan.read_text() + '''
           a5_t720_copy_shader = executable(
