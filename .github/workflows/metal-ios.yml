@@ -32,6 +32,10 @@ jobs:
       - name: Tools
         run: |
           set -eux
+          ls -d /Applications/Xcode*.app
+          # The provider uses MTLGPUAddress (iOS 26 SDK): pick the newest Xcode.
+          x=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$x"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           python3 -m venv "$RUNNER_TEMP/venv"
