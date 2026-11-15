@@ -1,0 +1,206 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 6153f5e..540ccea 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+ bsd/dev/j5_touch.c			standard
++bsd/dev/j5_gpu.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
+index e68ca6d..8209e15 100644
+--- a/bsd/dev/a5xelte_emmc.c
++++ b/bsd/dev/a5xelte_emmc.c
+@@ -944,9 +944,53 @@ emmc_log_thread(__unused void *arg, __unused wait_result_t wr)
+ 	}
+ }
+ 
++/* j5y17lte: eMMC throughput every 30 s in the console / RAM log (j5emmcstats=0 off). */
++static int j5_emmc_stats_sleep;
++static void
++j5_emmc_stats_thread(void *arg, wait_result_t result)
++{
++	(void)arg;
++	(void)result;
++	uint64_t prev_rb = 0, prev_active = 0, prev_req = 0;
++	for (;;) {
++		uint64_t deadline;
++		clock_interval_to_deadline(30, NSEC_PER_SEC, &deadline);
++		(void)assert_wait_deadline(&j5_emmc_stats_sleep, THREAD_UNINT, deadline);
++		thread_block(THREAD_CONTINUE_NULL);
++		uint64_t rb = emmc_read_bytes, active = emmc_active_ns, req = emmc_requests;
++		uint64_t d_ms = (active - prev_active) / 1000000u;
++		printf("J5 eMMC: 30s read=%llu KiB requests=%llu busy=%llu ms (%llu KiB/s while busy); "
++		    "total read=%llu MiB busy=%llu s wait=%llu s max_req=%llu ms retries=%u\n",
++		    (rb - prev_rb) / 1024u, req - prev_req, d_ms,
++		    d_ms ? (rb - prev_rb) / 1024u * 1000u / d_ms : 0,
++		    rb >> 20, active / 1000000000u, emmc_lock_wait_ns / 1000000000u,
++		    emmc_max_request_ns / 1000000u, emmc_read_retries);
++		prev_rb = rb;
++		prev_active = active;
++		prev_req = req;
++	}
++}
++
++static void
++j5_emmc_stats_start(void)
++{
++	static bool started;
++	int enabled = 1;
++	thread_t thread;
++	(void)PE_parse_boot_argn("j5emmcstats", &enabled, sizeof(enabled));
++	if (started || !enabled || !emmc_ready) {
++		return;
++	}
++	started = true;
++	if (kernel_thread_start(j5_emmc_stats_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
+ static void
+ emmc_log_start(void)
+ {
++	j5_emmc_stats_start();
+ 	int enabled = 0;
+ 	thread_t thread;
+ 	(void)PE_parse_boot_argn("a5log", &enabled, sizeof(enabled));
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index 433cd15..992a06b 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -670,6 +670,7 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
+ }
+ 
+ bool j5_touch_probe(void);
++void j5_gpu_probe(void);
+ 
+ void
+ a5xelte_touch_probe(void)
+@@ -685,7 +686,8 @@ a5xelte_touch_probe(void)
+ 	vm_offset_t mif;
+ 	uint32_t pclk;
+ 	uint32_t mifclk;
+-	/* j5y17lte: Imagis IST3038H path when the ADT has /j5-touch. */
++	/* j5y17lte: Mali-T830 identification probe, then the Imagis touch path. */
++	j5_gpu_probe();
+ 	if (j5_touch_probe()) {
+ 		return;
+ 	}
+diff --git a/bsd/dev/j5_gpu.c b/bsd/dev/j5_gpu.c
+new file mode 100644
+index 0000000..0c6d057
+--- /dev/null
++++ b/bsd/dev/j5_gpu.c
+@@ -0,0 +1,108 @@
++/*
++ * j5y17lte (SM-J530F, Exynos7870): Mali-T830 bring-up probe, stage 0.
++ *
++ * Only powers the G3D block and reads identification registers:
++ *   G3D power domain  PMU 0x10484000 CONFIGURATION / +4 STATUS (0xF = on),
++ *                     sequence from pwrcal S5E7870 blkpwr_g3d
++ *   G3D clocks        CMU_G3D 0x11460000: CLK_ENABLE_CLK_G3D_BUS +0x804
++ *                     bits 0-1, CLK_ENABLE_CLK_G3D_APB +0x808 bit 0;
++ *                     G3D_PLL_CON0 +0x100, MUX +0x200..0x208 logged only
++ *   GPU registers     0x11400000: GPU_ID 0x000, L2_FEATURES 0x004,
++ *                     TILER_FEATURES 0x00c, MEM_FEATURES 0x010,
++ *                     GPU_STATUS 0x034, SHADER_PRESENT 0x100,
++ *                     TILER_PRESENT 0x110, L2_PRESENT 0x120
++ * Addresses come from ADT /j5-gpu. No interrupt, MMU or job is touched.
++ * Disable with j5gpu=0.
++ */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void delay(int usec);
++void j5_gpu_probe(void);
++
++static uint32_t
++j5g_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++j5g_wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static vm_offset_t
++j5g_map(DTEntry entry, const char *name)
++{
++	uint64_t const *reg;
++	unsigned int len;
++	if (SecureDTGetProperty(entry, name, (void const **)&reg, &len) != kSuccess || len < 16) {
++		return 0;
++	}
++	return ml_io_map((vm_offset_t)reg[0], (vm_size_t)reg[1]);
++}
++
++void
++j5_gpu_probe(void)
++{
++	DTEntry entry;
++	int enabled = 1;
++	vm_offset_t pd, cmu, gpu;
++	uint32_t status;
++
++	if (SecureDTLookupEntry(NULL, "/j5-gpu", &entry) != kSuccess) {
++		return;
++	}
++	(void)PE_parse_boot_argn("j5gpu", &enabled, sizeof(enabled));
++	printf("J5 GPU: Mali-T830 probe enabled=%d\n", enabled);
++	if (!enabled) {
++		return;
++	}
++	pd = j5g_map(entry, "pmu-pd");
++	cmu = j5g_map(entry, "cmu");
++	gpu = j5g_map(entry, "reg");
++	if (!pd || !cmu || !gpu) {
++		printf("J5 GPU: MMIO mapping failed\n");
++		return;
++	}
++	printf("J5 GPU: before pd cfg=%#x status=%#x; PLL_CON0=%#x mux=%#x/%#x/%#x bus=%#x apb=%#x\n",
++	    j5g_rd(pd, 0), j5g_rd(pd, 4), j5g_rd(cmu, 0x100), j5g_rd(cmu, 0x200),
++	    j5g_rd(cmu, 0x204), j5g_rd(cmu, 0x208), j5g_rd(cmu, 0x804), j5g_rd(cmu, 0x808));
++
++	if ((j5g_rd(pd, 4) & 0xfu) != 0xfu) {
++		j5g_wr(pd, 0, (j5g_rd(pd, 0) & ~0xfu) | 0xfu);
++		for (unsigned n = 0; n < 10000; n++) {
++			if ((j5g_rd(pd, 4) & 0xfu) == 0xfu) {
++				break;
++			}
++			delay(1);
++		}
++	}
++	status = j5g_rd(pd, 4);
++	printf("J5 GPU: power domain status=%#x (%s)\n", status,
++	    (status & 0xfu) == 0xfu ? "on" : "NOT ON");
++	if ((status & 0xfu) != 0xfu) {
++		return;
++	}
++	j5g_wr(cmu, 0x804, j5g_rd(cmu, 0x804) | 0x3u);
++	j5g_wr(cmu, 0x808, j5g_rd(cmu, 0x808) | 0x1u);
++	delay(100);
++	printf("J5 GPU: clocks bus=%#x apb=%#x\n", j5g_rd(cmu, 0x804), j5g_rd(cmu, 0x808));
++
++	uint32_t id = j5g_rd(gpu, 0x000);
++	printf("J5 GPU: GPU_ID=%#x (product %#x r%up%u) L2_FEATURES=%#x TILER_FEATURES=%#x MEM_FEATURES=%#x\n",
++	    id, id >> 16, (id >> 12) & 0xfu, (id >> 4) & 0xffu,
++	    j5g_rd(gpu, 0x004), j5g_rd(gpu, 0x00c), j5g_rd(gpu, 0x010));
++	printf("J5 GPU: GPU_STATUS=%#x SHADER_PRESENT=%#x TILER_PRESENT=%#x L2_PRESENT=%#x\n",
++	    j5g_rd(gpu, 0x034), j5g_rd(gpu, 0x100), j5g_rd(gpu, 0x110), j5g_rd(gpu, 0x120));
++}
++#endif

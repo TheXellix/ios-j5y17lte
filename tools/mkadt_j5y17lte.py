@@ -160,6 +160,13 @@ def build(model='iphone8plus'):
         ('target-width', mkadt.u32(m['width'])),
         ('target-height', mkadt.u32(m['height'])),
     ]))
+    # Mali-T830 stage-0 probe (patch j5 0014): GPU, G3D power domain in the
+    # PMU (blkpwr_g3d), CMU_G3D. Identification reads only.
+    root.children.append(mkadt.node('j5-gpu', [
+        ('reg', mkadt.u64(0x11400000, 0x5000)),
+        ('pmu-pd', mkadt.u64(0x10484000, 0x1000)),
+        ('cmu', mkadt.u64(0x11460000, 0x1000)),
+    ]))
     root.children.append(mkadt.node('a5xelte-emmc', [
         ('reg', mkadt.u64(0x13540000, 0x2000)),
     ]))
