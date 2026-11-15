@@ -165,3 +165,10 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   spin-loop check (2 cycles/iteration: 449.8 M it/s at 902 MHz, 791.2 M
   at 1586 MHz in TWRP) and j5cpufreq=MHz DVFS (BUCK1 + PLL, ECT values:
   1586 = P3 M183 S0, same bus dividers as 902).
+- 2026-11-15 boot 26 (run23: 8 CPUs, j5cpufreq=1586, a5gpu=8 a5fb_gpu=1):
+  DVFS works: BUCK1 raised, both PLLs 0xa15b0501 -> 0xa0b70300 (1586 MHz),
+  locked in 1 us; the spin loop went 601 -> 1057 (x1.76 = 1586/902). User:
+  "molto più fluido". The PMU cycle counter readings are not usable.
+  T830 texture fixture 256/256 and the private runtime queue is ready, but
+  the full-frame GPU present silently fell back to the CPU: patch 0025
+  logs the reason. j5-boot.sh now defaults to cpus=8 j5cpufreq=1586.

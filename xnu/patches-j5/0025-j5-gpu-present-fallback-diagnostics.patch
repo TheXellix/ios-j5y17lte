@@ -1,0 +1,100 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp b/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
+index 7e37c1c..140c1a3 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUFramePresent.cpp
+@@ -27,6 +27,13 @@ static bool gPanelShadowValid;
+ static uint64_t gPanelEpoch;
+ static uint64_t gBandFrames,gUnchangedFrames,gBandBytes,gComparedFrames;
+ void a5g3d_frame_present_invalidate(){gPanelShadowValid=false;}
++static uint32_t gWhyCount;
++static void
++present_why(const char *why, uint32_t a, uint32_t b)
++{
++    if (++gWhyCount <= 12 || (gWhyCount & 0xff) == 0)
++        IOLog("J5 G3D present fallback #%u: %s (%#x %#x)\n", gWhyCount, why, a, b);
++}
+ 
+ static inline uint32_t *
+ word_at(uint8_t *bytes, uint32_t offset)
+@@ -149,8 +156,10 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+     vm_offset_t probeGPU = 0;
+     uint64_t probeToken = 0;
+     if (!a5g3d_queue_acquire_runtime(&probeOwner, &probeToken,
+-        &probeBacking, &probeGPU))
++        &probeBacking, &probeGPU)) {
++        present_why("runtime queue busy/unavailable", 0, 0);
+         return kA5G3DFramePresentCPUFallback;
++    }
+     /* j5y17lte: the boot T830 texture fixture must have sampled 256/256
+      * texels through this exact shader/descriptor set (patch j5 0020).
+      * frame_map_begin independently validates every IOSurface. */
+@@ -160,8 +169,10 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+         job->isEqualTo("private-texture-sampled");
+     a5g3d_queue_release(probeOwner, probeToken);
+     probeOwner->release();
+-    if (!sampleOK)
++    if (!sampleOK) {
++        present_why("boot texture fixture not verified", job != nullptr, 0);
+         return kA5G3DFramePresentCPUFallback;
++    }
+ 
+     A5G3DFrameMapLease lease = {};
+     const A5G3DFrameMapStatus mapped = a5g3d_frame_map_begin(source, &lease);
+@@ -197,8 +208,10 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+             }
+         }
+         uint8_t *bytes = static_cast<uint8_t *>(lease.backing->getBytesNoCopy());
+-        if (!prepare_full_frame_fixture(lease.backing,band))
++        if (!prepare_full_frame_fixture(lease.backing,band)) {
++            present_why("fixture check", *word_at(bytes, 0x700), *word_at(bytes, kFB + 33 * 4));
+             break;
++        }
+         const uint32_t shader = *reinterpret_cast<volatile uint32_t *>(
+             lease.gpuMMIO + 0x140);
+         if (!shader)
+@@ -216,6 +229,7 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+             lease.owner, lease.gpuMMIO, lease.backing, bytes,
+             tiler, &tilerDone);
+         if (tilerStatus != kA5G3DQueueCompleted) {
++            present_why("tiler job", tilerStatus, (uint32_t)tilerDone.fence);
+             /* The tiler has no panel write target. A terminal fault stops
+              * AS0; CPU copying the panel remains safe at this point. */
+             a5g3d_queue_release(lease.owner, tilerToken);
+@@ -226,8 +240,10 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+         if (lease.backing->performOperation(kIOMemoryIncoherentIOFlush,
+             kData, 0x4000) != kIOReturnSuccess)
+             break;
+-        if (!a5g3d_frame_map_reacquire(&lease))
++        if (!a5g3d_frame_map_reacquire(&lease)) {
++            present_why("reacquire", 0, 0);
+             break;
++        }
+         bytes = static_cast<uint8_t *>(lease.backing->getBytesNoCopy());
+         A5G3DQueueRequest fragment = {};
+         fragment.slot = 0;
+@@ -262,6 +278,7 @@ a5g3d_frame_present(SweetSurface *source,uint64_t *copiedBytes,uint64_t panelEpo
+         } else if (fragmentStatus == kA5G3DQueueBusy ||
+                    fragmentStatus == kA5G3DQueueInvalid) {
+             /* Rejected before START: the panel was not DMA-written. */
++            present_why("fragment rejected", fragmentStatus, 0);
+             a5g3d_queue_release(lease.owner, fragmentToken);
+         } else {
+             /* START may have reached a live DECON target. Neither CPU
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 33d2d3d..0713e1f 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -830,6 +830,13 @@ AppleCLCD::present(const uint8_t *rec, bool *complete)
+ 	} else if (fGPUCopy && fPerfLog) {
+ 		fPerfGPUIneligible++;
+ 	}
++	static uint32_t j5_gate_logged;
++	if (fGPUCopy && j5_gate_logged++ < 16) {
++		IOLog("J5 FB gpu gate: panel=%d %ux%u off=%d,%d mask=%#x a=%u,%u,%u,%u b=%u,%u,%u,%u\n",
++		    fJ5Panel != 0, fWidth, fHeight, fOffX, fOffY, mask,
++		    get32(rec + 0x64, 0), get32(rec + 0x64, 4), get32(rec + 0x64, 8), get32(rec + 0x64, 12),
++		    get32(rec + 0xc4, 0), get32(rec + 0xc4, 4), get32(rec + 0xc4, 8), get32(rec + 0xc4, 12));
++	}
+ #endif
+ 
+ 	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
