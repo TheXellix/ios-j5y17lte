@@ -543,9 +543,40 @@ static BOOL a5VariableBlurStage(NSDictionary *request)
         ([request[@"stage"] isEqual:@"fragment"]&&
         [request[@"function"] isEqual:@"variable_blur_downsample_frag_lph"]);
 }
+/* j5y17lte: interface-matched companion stages generated from the device's
+ * QuartzCore library (tools/j5-make-companions.py). Optional file. */
+static NSDictionary *a5Companion(NSDictionary *request)
+{
+    static NSDictionary *companions;static BOOL loaded;
+    if(!loaded){loaded=YES;
+        NSString *path=[installed stringByAppendingPathComponent:@"companions.json"];
+        struct stat st;
+        if(!lstat(path.fileSystemRepresentation,&st)&&S_ISREG(st.st_mode)&&st.st_size<4*1024*1024){
+            NSData *data=[NSData dataWithContentsOfFile:path];
+            id value=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]:nil;
+            if([value isKindOfClass:NSDictionary.class]&&[value[@"schema"] isEqual:@1])companions=value;
+        }
+        fprintf(stderr,"A5XELTE shader compiler: companions %s\n",companions?"loaded":"absent");
+    }
+    NSDictionary *byStage=companions[request[@"stage"]];
+    NSDictionary *entry=[byStage isKindOfClass:NSDictionary.class]?byStage[request[@"function"]]:nil;
+    if(![entry isKindOfClass:NSDictionary.class]||!a5Identifier(entry[@"function"])||
+        ![entry[@"constants"] isKindOfClass:NSArray.class])return nil;
+    return entry;
+}
 static NSDictionary *a5DynamicScaffold(NSDictionary *request,NSDictionary *fallback)
 {
-    if(!a5VariableBlurStage(request))return fallback;
+    if(!a5VariableBlurStage(request)){
+        NSDictionary *entry=a5Companion(request);
+        if(!entry)return fallback;
+        NSMutableDictionary *pair=[fallback mutableCopy];
+        BOOL vertex=[request[@"stage"] isEqual:@"vertex"];
+        pair[vertex?@"fragment_function":@"vertex_function"]=entry[@"function"];
+        pair[vertex?@"fragment_constants":@"vertex_constants"]=entry[@"constants"];
+        fprintf(stderr,"A5XELTE shader compiler: companion %s -> %s\n",
+            [request[@"function"] UTF8String],[entry[@"function"] UTF8String]);
+        return pair;
+    }
     NSMutableDictionary *pair=[fallback mutableCopy];
     pair[@"vertex_function"]=@"variable_blur_vert_lph";
     pair[@"fragment_function"]=@"variable_blur_downsample_frag_lph";

@@ -72,6 +72,12 @@ done
 python3 "$here/tools/j5-make-scaffold603.py" \
 	"$mnt/System/Library/Frameworks/QuartzCore.framework/default.metallib" "$tmp/generic603.json"
 sudo install -o 0 -g 0 -m 0644 "$tmp/generic603.json" "$mnt/usr/libexec/a5shader/generic603.json"
+python3 "$here/tools/j5-make-companions.py" \
+	"$mnt/System/Library/Frameworks/QuartzCore.framework/default.metallib" "$tmp/companions.json"
+sudo install -o 0 -g 0 -m 0644 "$tmp/companions.json" "$mnt/usr/libexec/a5shader/companions.json"
+# Published results (also failures) belong to the previous compiler: drop
+# them so pending requests are compiled again; the request spool stays.
+sudo rm -rf "$mnt/private/var/tmp/a5mali-shader-compiled" "$mnt/private/var/db/a5shader-cache"
 sudo install -d -o 0 -g 0 -m 0755 "$mnt/private/var/log"
 sudo install -o 0 -g 0 -m 0644 "$comp/compiler-launchdaemon.plist" \
 	"$mnt/System/Library/LaunchDaemons/com.orhunnx.a5shader-compile.plist"
