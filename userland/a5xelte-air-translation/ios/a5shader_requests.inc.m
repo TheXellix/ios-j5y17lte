@@ -80,6 +80,9 @@ static BOOL a5RequestFunction(NSDictionary *f, NSString *stage,
 
 static BOOL a5KnownProfile(NSDictionary *request, NSDictionary *known)
 {
+    /* j5y17lte: a device-derived 603 recipe only scaffolds dynamic stage
+     * compiles; it carries no pinned native output and never matches. */
+    if ([known[@"j5_scaffold_only"] isEqual:@YES]) return NO;
     if (![request[@"kind"] isEqual:@"pipeline"] ||
         !a5ExactKeys(request,@[@"schema",@"kind",@"source_library",
             @"metallib_sha256",@"gpu_id",@"compiler_abi",@"vertex",
@@ -1408,7 +1411,16 @@ static void a5Serve(NSString *self)
     for (NSNumber *profile in @[@602,@603,@604,@605,@606]) {
         serviceCheckpoint("recipe-read-begin",nil,profile.stringValue);
         NSString *name = [NSString stringWithFormat:@"generic%@.json",profile];
-        NSDictionary *known = readJSON([installed stringByAppendingPathComponent:name]);
+        NSString *recipe = [installed stringByAppendingPathComponent:name];
+        /* j5y17lte ships no A5-captured recipes: absent ones are skipped
+         * (their requests stay unsupported) instead of exiting the KeepAlive
+         * service into a launchd respawn loop. */
+        struct stat recipeStat;
+        if (lstat(recipe.fileSystemRepresentation,&recipeStat) && errno == ENOENT) {
+            fprintf(stderr,"A5XELTE shader compiler: recipe %s absent, skipped\n",name.UTF8String);
+            continue;
+        }
+        NSDictionary *known = readJSON(recipe);
         if (![known[@"profile_id"] isEqual:profile] ||
             ![sourceSHA isEqual:known[@"metallib_sha256"]])
             fail(@"installed generic recipe or stock library differs");
