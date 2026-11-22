@@ -140,7 +140,10 @@ jobs:
       - name: A5MaliMetal provider bundle (T830 runtime encoders)
         run: |
           set -eux
+          # Empty registry: enables the native render backend for the runtime-
+          # linked dynamic stages (the T830 has no precompiled families).
           sh userland/a5mali-metal/StockMetalPlugin/build_local.sh "$RUNNER_TEMP/out/plugin" \
+            --compiled-registry-dir userland/a5mali-metal/j5-registry \
             --mesa-build "$HOST_MESA"
 
       - name: Shader compiler service package (T830)
