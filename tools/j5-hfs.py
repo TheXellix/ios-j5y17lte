@@ -18,6 +18,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 SERIAL = os.environ.get('ANDROID_SERIAL', '5200479dc6a79451')
@@ -30,9 +31,18 @@ class Phone:
         # 4 KiB aligned dd; callers ask for block-aligned ranges.
         bs = 4096
         first, last = offset // bs, (offset + size + bs - 1) // bs
-        cmd = ['adb', '-s', SERIAL, 'exec-out',
-               f'dd if={PART} bs={bs} skip={first} count={last - first} 2>/dev/null']
-        data = subprocess.run(cmd, check=True, capture_output=True).stdout
+        dd = f'dd if={PART} bs={bs} skip={first} count={last - first} 2>/dev/null'
+        if size <= 1 << 20:
+            data = subprocess.run(['adb', '-s', SERIAL, 'exec-out', dd],
+                                  check=True, capture_output=True).stdout
+        else:
+            # adb exec-out streams at ~2 MB/s; a file pull runs at ~30 MB/s.
+            with tempfile.TemporaryDirectory() as tmp:
+                subprocess.run(['adb', '-s', SERIAL, 'shell', dd + ' > /tmp/j5hfs'], check=True)
+                subprocess.run(['adb', '-s', SERIAL, 'pull', '/tmp/j5hfs', tmp + '/r'],
+                               check=True, capture_output=True)
+                subprocess.run(['adb', '-s', SERIAL, 'shell', 'rm -f /tmp/j5hfs'], check=True)
+                data = open(tmp + '/r', 'rb').read()
         data = data[offset - first * bs:][:size]
         if len(data) != size:
             raise IOError(f'short read at {offset}: {len(data)}/{size}')
