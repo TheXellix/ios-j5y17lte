@@ -39,7 +39,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# An image read back after a forced reboot is not cleanly unmounted and
+# Linux would mount it read-only: repair first (same size restore as below).
+# A repair pass can end "could not be verified completely" (seen on hard
+# link chains); repeat until a pass verifies so the volume is marked clean.
+for pass in 1 2 3 4; do
+	if sudo fsck.hfsplus -f -y "$img"; then break; fi
+	echo "fsck pass $pass repaired the volume, checking again"
+done
+[ "$(stat -c %s "$img")" = "$img_size" ] || sudo truncate -s "$img_size" "$img"
 sudo mount -t hfsplus -o loop,force,rw "$img" "$mnt"
+grep -q " $mnt hfsplus rw" /proc/mounts || { echo "image mounted read-only (run fsck.hfsplus)" >&2; exit 4; }
 [ -f "$mnt/System/Library/xpc/launchd.plist" ] || { echo "not an iOS root: $img" >&2; exit 3; }
 
 echo "== bundle"

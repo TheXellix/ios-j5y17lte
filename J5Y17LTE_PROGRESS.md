@@ -189,3 +189,14 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   running (shown=256 by the end). Userland: metal2vulkan, spirv-val and the
   Mesa Midgard backend build for iOS in CI; the five runtime encoders are
   ported to v5 and compile; provider bundle + compiler package in progress.
+- 2026-11-22 boot 30 (run26, A5MaliMetal provider + a5shader-compile
+  installed): "A5XELTE Metal: resource client authorized" for backboardd,
+  which creates its first surfaces and then waits; SpringBoard never gets
+  a frame (user: stuck, console shows "exec a5shader-compile" repeating).
+  Cause: a5Serve exits when generic602-606.json (A5 private captures) are
+  missing, launchd KeepAlive respawns it, and backboardd's only request
+  (fragment downsample_4_frag_lph, no constants) is never served. QuartzCore
+  default.metallib sha256 11c74cc4... is the same library the A5 recipes
+  were built for. Fix: recipes optional, a profile 603 scaffold generated
+  on the PC from the image's metallib (j5-make-scaffold603.py), compiler
+  stderr kept in /private/var/log/a5shader-compile.log.
