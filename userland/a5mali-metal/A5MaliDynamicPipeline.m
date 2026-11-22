@@ -189,6 +189,16 @@ static BOOL vertexABI(A5MaliDynamicShaderCacheEntry *e,const A5MaliCompiledProfi
     BOOL uvOnly=attributes==3&&
         ioShape(e.nativeABI[@"inputs"],dualInputs,dualInputBases,dualInputMasks,3)&&
         ioShape(e.nativeABI[@"outputs"],dualLocations,dualBases,dualMasks,4);
+    /* j5y17lte: position + one UV, no color (QuartzCore downsample_blur_vert_lph,
+     * ...). Native bases 0/1/2 equal the first three of the uvOnly shape and
+     * the fragment reads VAR0 only, so it links as uvOnly; the emitter's UV1
+     * descriptor/varying stay unread by this shader. */
+    unsigned oneUVInputs[]={15,16},oneUVInputBases[]={0,1},oneUVInputMasks[]={15,3};
+    unsigned oneUVLocations[]={0,12,32},oneUVBases[]={0,1,2},oneUVMasks[]={15,1,3};
+    BOOL uvOne=compact&&
+        ioShape(e.nativeABI[@"inputs"],oneUVInputs,oneUVInputBases,oneUVInputMasks,2)&&
+        ioShape(e.nativeABI[@"outputs"],oneUVLocations,oneUVBases,oneUVMasks,3);
+    if(uvOne){uvOnly=YES;compact=NO;}
     if((attributes!=2&&attributes!=3&&attributes!=4)||
        (!uvOnly&&(!ioShape(e.nativeABI[@"inputs"],compact?compactInputs:dual?dualInputs:fullInputs,
            compact?compactInputBases:dual?dualInputBases:fullInputBases,compact?compactInputMasks:dual?dualInputMasks:fullInputMasks,compact?2:dual?4:3)||
@@ -198,7 +208,9 @@ static BOOL vertexABI(A5MaliDynamicShaderCacheEntry *e,const A5MaliCompiledProfi
     }
     NSArray *vertexAttributes=compact?
         @[@{@"location":@0,@"binding":@0,@"format":@109,@"offset":@0},
-          @{@"location":@1,@"binding":@0,@"format":@97,@"offset":@32}]:uvOnly?
+          @{@"location":@1,@"binding":@0,@"format":@97,@"offset":@32}]:uvOne?
+        @[@{@"location":@0,@"binding":@0,@"format":@109,@"offset":@0},
+          @{@"location":@1,@"binding":@0,@"format":@103,@"offset":@16}]:uvOnly?
         @[@{@"location":@0,@"binding":@0,@"format":@109,@"offset":@0},
           @{@"location":@1,@"binding":@0,@"format":@103,@"offset":@16},
           @{@"location":@2,@"binding":@0,@"format":@103,@"offset":@24}]:dual?
