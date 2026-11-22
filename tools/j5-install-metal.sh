@@ -18,6 +18,7 @@
 #   tools/j5-flash-userdata.sh --changed ROOT.img
 set -euo pipefail
 img=$(realpath "$1")
+img_size=$(stat -c %s "$img")
 payload=$(realpath "$2")
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 bundle="$payload/plugin/A5MaliMetal.bundle"
@@ -84,4 +85,7 @@ sync
 sudo umount "$mnt"
 echo "== fsck"
 sudo fsck.hfsplus -f -y "$img" || true
+# fsck.hfsplus may append to a loop image (seen once: +16896 bytes); the
+# partition layout is fixed, so restore the original size.
+[ "$(stat -c %s "$img")" = "$img_size" ] || sudo truncate -s "$img_size" "$img"
 echo "installed; now flash: $here/tools/j5-flash-userdata.sh --changed $img"
