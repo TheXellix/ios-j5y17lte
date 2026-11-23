@@ -526,6 +526,18 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
         .resources=e->_resources,.resourceCount=resourceCount,.pushFields=e->_pushes,.pushFieldCount=pushCount,
         .attributes=e->_attributes,.attributeCount=attributeCount,.layouts=&e->_layout,.layoutCount=1,
         .attachmentContracts=e->_attachments,.attachmentContractCount=2,.immutableSamplers=e->_samplers,.immutableSamplerCount=immutableCount};
+    /* j5y17lte: QuartzCore declares a second BGRA8 colour target on some
+     * pipelines (boot 34: downsample_4, "attachment1.pixelFormat actual=80
+     * expected=0"). fragmentABI admits only the location-4 colour output, so
+     * RT1 is never written by a dynamic fragment: accept it as an inactive
+     * target with the descriptor's own format and state, as the A5 contracts
+     * did for their static families. */
+    MTLRenderPipelineColorAttachmentDescriptor *rt1=d.colorAttachments[1];
+    if(rt1.pixelFormat==MTLPixelFormatBGRA8Unorm||rt1.pixelFormat==MTLPixelFormatRGBA8Unorm||
+       rt1.pixelFormat==MTLPixelFormatBGR5A1Unorm){
+        e->_profile.colorFormats[1]=(uint32_t)rt1.pixelFormat;
+        e->_attachments[1].attachments[1]=attachmentState(rt1);
+    }
 #if __has_include("A5MaliCompiledRegistryData.inc") || defined(A5_MALI_REQUIRE_COMPILED_REGISTRY)
     if(!A5MaliDynamicRuntimeProfileSupported(&e->_profile))
         return rejectPipeline(vf,ff,@"emitter.resource-graph",unsupported(@"dynamic resource graph is outside native emitter bounds"),error);
