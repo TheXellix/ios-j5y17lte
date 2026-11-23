@@ -55,11 +55,14 @@ def analyse(bitcode, scaffold):
     kind = 'vertex' if re.search(r'^!air\.vertex = ', text, re.M) else \
         'fragment' if re.search(r'^!air\.fragment = ', text, re.M) else None
     gated = lambda line: '"air.function_constant"' in line
-    outs, ins, inputs = set(), set(), []
+    outs, ins, inputs, targets = set(), set(), [], set()
     for line in text.splitlines():
         m = re.search(r'"air\.vertex_output", !"([^"]+)"', line)
         if m and not gated(line):
             outs.add(m.group(1))
+        m = re.search(r'"air\.render_target", i32 (\d+)', line)
+        if m:
+            targets.add(int(m.group(1)))
         m = re.search(r'"air\.fragment_input", !"(generated\([^"]+\))"', line)
         if m:
             ins.add(m.group(1))
@@ -67,7 +70,7 @@ def analyse(bitcode, scaffold):
                       r'!"air\.arg_type_name", !"(\w+)"', line)
         if m:
             inputs.append((int(m.group(1)), m.group(2), gated(line)))
-    return {'kind': kind, 'outs': outs, 'ins': ins, 'inputs': inputs,
+    return {'kind': kind, 'outs': outs, 'ins': ins, 'inputs': inputs, 'targets': targets,
             'constants': scaffold.constants(bitcode) if '!air.function_constants' in text else {}}
 
 
@@ -105,7 +108,10 @@ def main():
         cands = [f for f, fi in fragments.items() if fi['ins'] <= vi['outs']]
         if not cands:
             continue
-        f = min(cands, key=lambda f: (bool(fragments[f]['constants']),
+        # The compiler declares colour attachment 0 only (metal2vulkan
+        # --color-format 0:BGRA8Unorm): a companion writing RT1+ is invalid.
+        f = min(cands, key=lambda f: (bool(fragments[f]['targets'] - {0}),
+                                      bool(fragments[f]['constants']),
                                       len(fragments[f]['ins']), -prefix(v, f), f))
         if f not in SCAFFOLD:
             out['vertex'][v] = {'function': f, 'constants': zeros(fragments[f]['constants'])}
