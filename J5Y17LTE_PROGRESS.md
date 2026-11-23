@@ -200,3 +200,16 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   were built for. Fix: recipes optional, a profile 603 scaffold generated
   on the PC from the image's metallib (j5-make-scaffold603.py), compiler
   stderr kept in /private/var/log/a5shader-compile.log.
+- 2026-11-23 boots 31-38: compiler service runs (companions.json pairs
+  each stage with an interface-matched companion, generated from the
+  phone's metallib); downsample_4/8, downsample_blur_vert, attachment_clear
+  compile on the phone to Midgard. Provider: empty compiled registry
+  enables the native backend; new position+one-UV vertex shape; inactive
+  QuartzCore RT1 accepted (descriptor, encoder gate, attachment state).
+  Native jobs need boot-arg a5native=1 (lab switch): cycle 38 accepted the
+  first dynamic pipelines, then path_blit_vert_lph failed in metal2vulkan
+  (companion wrote RT0-2; companions now RT0-only, not yet tested).
+  Unattended loop: j5twrp=SECONDS (patch 0029) reboots into TWRP,
+  patched OrangeFox skips the system_readonly prompt (backup in
+  backup/recovery), /usr/local/sbin/j5-root-install via sudoers,
+  tools/j5-cycle.sh; CI on macos-15-intel when arm64 has no capacity.
