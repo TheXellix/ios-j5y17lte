@@ -1,0 +1,77 @@
+diff --git a/bsd/dev/j5_battery.c b/bsd/dev/j5_battery.c
+index 48f90f5..cd6a236 100644
+--- a/bsd/dev/j5_battery.c
++++ b/bsd/dev/j5_battery.c
+@@ -27,6 +27,9 @@
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/cpu_number.h>
++#include <kern/thread_call.h>
++#include <kern/clock.h>
++#include <sys/reboot.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern void delay(int usec);
+@@ -180,9 +183,62 @@ j5b_read_retry(vm_offset_t i2c, uint8_t slave, uint8_t reg, uint8_t *out, unsign
+ 
+ void j5_clock_report(void);
+ 
++/*
++ * j5twrp=SECONDS: unattended test boots. After SECONDS the kernel syncs and
++ * reboots (reboot_kernel), which lands in TWRP through the j5-reset restart
++ * hook (pe_serial.c, Samsung recovery INFORM3); the RAM log survives as
++ * /proc/last_kmsg. If the orderly shutdown has not reset the phone 60 s
++ * later, the hook is called directly. Armed once, from SweetBattery start.
++ */
++extern int (*PE_halt_restart)(unsigned int type);
++extern int reboot_kernel(int, char *);
++static thread_call_t j5_twrp_call, j5_twrp_force_call;
++
++static void
++j5_twrp_force(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	printf("J5 autotwrp: orderly reboot stalled, forcing restart into TWRP\n");
++	if (PE_halt_restart != NULL) {
++		(void)PE_halt_restart(1 /* kPERestartCPU */);
++	}
++}
++
++static void
++j5_twrp_fire(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	uint64_t deadline;
++	printf("J5 autotwrp: time is up, syncing and rebooting into TWRP\n");
++	clock_interval_to_deadline(60, NSEC_PER_SEC, &deadline);
++	(void)thread_call_enter_delayed(j5_twrp_force_call, deadline);
++	(void)reboot_kernel(RB_AUTOBOOT, (char *)"j5twrp");
++}
++
++static void
++j5_twrp_arm(void)
++{
++	unsigned seconds = 0;
++	uint64_t deadline;
++	if (j5_twrp_call != NULL ||
++	    !PE_parse_boot_argn("j5twrp", &seconds, sizeof(seconds)) || seconds == 0) {
++		return;
++	}
++	if (seconds < 60) {
++		seconds = 60;
++	}
++	j5_twrp_call = thread_call_allocate_with_priority(j5_twrp_fire, NULL, THREAD_CALL_PRIORITY_HIGH);
++	j5_twrp_force_call = thread_call_allocate_with_priority(j5_twrp_force, NULL, THREAD_CALL_PRIORITY_HIGH);
++	if (j5_twrp_call == NULL || j5_twrp_force_call == NULL) {
++		return;
++	}
++	clock_interval_to_deadline(seconds, NSEC_PER_SEC, &deadline);
++	(void)thread_call_enter_delayed(j5_twrp_call, deadline);
++	printf("J5 autotwrp: rebooting into TWRP in %u s\n", seconds);
++}
++
+ int
+ j5_battery_init(void)
+ {
++	j5_twrp_arm();
+ 	if (!j5b_state) {
+ 		j5_clock_report();
+ 	}
