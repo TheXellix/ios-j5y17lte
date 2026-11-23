@@ -539,6 +539,9 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
  for(unsigned c=0;c<2;++c)for(unsigned i=0;i<8;++i){
   const A5MaliCompiledAttachmentState*a=&p->attachmentContracts[c].attachments[i];
   unsigned over=c==1&&i==0;
+  /* j5y17lte: the inactive RT1 (colorFormats[1]) keeps QuartzCore's own
+   * state; the emitter binds RT0 only, so that state never reaches the GPU. */
+  if(i==1&&p->colorFormats[1])continue;
   if((p->flags&A5MaliProfileRenderState)&&c==1&&i==0){
    unsigned route=A5MaliLowerRenderState(a).route;
    if(p->flags&A5MaliProfileShaderBlend){
