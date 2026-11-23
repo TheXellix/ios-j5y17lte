@@ -7,6 +7,10 @@ name: metal-ios
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner image (macos-15-intel when arm64 has no capacity)
+        default: macos-15
   push:
     branches: [j5y17lte]
     paths:
@@ -24,7 +28,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +63,7 @@ jobs:
             ${{ runner.temp }}/out/midgard/build-manifest.json
             ${{ runner.temp }}/mesa-26.2.4.tar.xz
             ${{ runner.temp }}/m2v-profile.json
-          key: ios-toolchain-v1-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
+          key: ios-toolchain-v1-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
 
       - name: metal2vulkan (host + iOS)
         if: steps.tc.outputs.cache-hit != 'true'
@@ -101,7 +105,7 @@ jobs:
             ${{ runner.temp }}/out/midgard/build-manifest.json
             ${{ runner.temp }}/mesa-26.2.4.tar.xz
             ${{ runner.temp }}/m2v-profile.json
-          key: ios-toolchain-v1-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
+          key: ios-toolchain-v1-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/*.c', 'userland/a5xelte-air-translation/families/*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
 
       - name: Host Mesa template for the runtime encoders
         run: |
