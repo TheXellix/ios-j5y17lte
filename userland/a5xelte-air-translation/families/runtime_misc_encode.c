@@ -416,6 +416,11 @@ static int generic_textured_contract(const A5MaliCompiledProfile*p){
 /* Dynamic code is compiled from the pinned source library by the root worker.
  * Its module fingerprint is deliberately not enumerated here. This independent
  * encoder gate admits only resource/packing semantics this emitter implements. */
+/* j5y17lte: remember which contract line rejected a dynamic profile, so the
+ * provider can name it ("dynamic resource graph is outside native emitter
+ * bounds" alone does not say which bound). */
+unsigned a5_dynamic_contract_reject_line;
+#define A5_CONTRACT_REJECT do{a5_dynamic_contract_reject_line=__LINE__;return 0;}while(0)
 static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
  if(p->profileID!=A5MaliDynamicProfileID||
     !(p->flags&A5MaliProfileDynamicStages)||
@@ -427,15 +432,15 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
     p->attributeCount<2||p->attributeCount>4||!p->attributes||p->layoutCount!=1||!p->layouts||
     !p->resourceCount||p->resourceCount>16||!p->resources||
     !p->pushFieldCount||p->pushFieldCount>16||!p->pushFields||
-    p->attachmentContractCount!=2||!p->attachmentContracts)return 0;
+    p->attachmentContractCount!=2||!p->attachmentContracts)A5_CONTRACT_REJECT;
  /* j5y17lte: an inactive RT1 declared by QuartzCore (BGRA8/RGBA8/BGR5A1)
   * is allowed: the dynamic fragment writes location 4 (RT0) only and this
   * emitter binds RT0 alone, so RT1 is never touched by the GPU. */
  for(unsigned i=1;i<8;++i)if(p->colorFormats[i]&&
-    (i!=1||(p->colorFormats[1]!=80&&p->colorFormats[1]!=70&&p->colorFormats[1]!=43)))return 0;
+    (i!=1||(p->colorFormats[1]!=80&&p->colorFormats[1]!=70&&p->colorFormats[1]!=43)))A5_CONTRACT_REJECT;
  static const unsigned formats[]={31,29,29,27};
  const A5MaliCompiledVertexLayout*l=p->layouts;
- if(l->index!=1||l->stride<8||l->stride>2048||(l->stride&3)||l->stepFunction!=1||l->stepRate!=1)return 0;
+ if(l->index!=1||l->stride<8||l->stride>2048||(l->stride&3)||l->stepFunction!=1||l->stepRate!=1)A5_CONTRACT_REJECT;
  unsigned attributeMask=0,requiredAttributes=(p->flags&A5MaliProfileVertexColorOnly)?0x9u:
   (p->flags&A5MaliProfileVertexNoColor)?0x7u:
   (p->flags&A5MaliProfileVertexTwoUV)?0xfu:0xbu;
@@ -443,67 +448,67 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
   unsigned index=a->index;
   if(index>=4||(i&&index<=p->attributes[i-1].index)||
      (a->format!=formats[index]&&(index||a->format!=29))||
-     a->bufferIndex!=1)return 0;
+     a->bufferIndex!=1)A5_CONTRACT_REJECT;
   unsigned width=a->format==31?16:8,alignment=index==3?2:4;
-  if(a->offset%alignment||a->offset>l->stride||width>l->stride-a->offset)return 0;
+  if(a->offset%alignment||a->offset>l->stride||width>l->stride-a->offset)A5_CONTRACT_REJECT;
   attributeMask|=1u<<index;
  }
- if((attributeMask&requiredAttributes)!=requiredAttributes)return 0;
+ if((attributeMask&requiredAttributes)!=requiredAttributes)A5_CONTRACT_REJECT;
  unsigned textures=0,samplers=0,fetches=0;uint32_t textureBindings[4]={0},samplerBindings[4]={0};
  uint32_t bindings[2]={0},slots[2]={0},descriptorBindings[2]={0};
  for(unsigned i=0;i<p->resourceCount;++i){const A5MaliCompiledResource*r=p->resources+i;
-  if((r->stage!=1&&r->stage!=2)||r->windowOffset||r->sysvalOffset)return 0;
+  if((r->stage!=1&&r->stage!=2)||r->windowOffset||r->sysvalOffset)A5_CONTRACT_REJECT;
   unsigned allowed=A5MaliResourceRead|(r->kind==A5MaliResourceBuffer?A5MaliResourcePadUniformTail:
    r->kind==A5MaliResourceSampler?A5MaliResourceImmutableSampler:0);
-  if(!(r->flags&A5MaliResourceRead)||(r->flags&~allowed))return 0;
+  if(!(r->flags&A5MaliResourceRead)||(r->flags&~allowed))A5_CONTRACT_REJECT;
   unsigned st=r->stage-1;
   if(r->kind==A5MaliResourceBuffer){
    if(r->metalIndex>=31||r->bindingIndex>=7||r->nativeIndex!=r->bindingIndex+1||
       !r->uniformBytes||r->uniformBytes>4096||r->pushOffset>76||(r->pushOffset&3)||
-      (bindings[st]&(1u<<r->bindingIndex))||(slots[st]&(1u<<r->metalIndex)))return 0;
-   if(descriptorBindings[st]&(1u<<r->bindingIndex))return 0;
+      (bindings[st]&(1u<<r->bindingIndex))||(slots[st]&(1u<<r->metalIndex)))A5_CONTRACT_REJECT;
+   if(descriptorBindings[st]&(1u<<r->bindingIndex))A5_CONTRACT_REJECT;
    descriptorBindings[st]|=1u<<r->bindingIndex;
    bindings[st]|=1u<<r->bindingIndex;slots[st]|=1u<<r->metalIndex;
   }else if(r->kind==A5MaliResourceTexture){
    if(r->stage!=2||r->metalIndex>=31||r->bindingIndex>=32||r->nativeIndex>=4||r->uniformBytes||r->pushOffset||
-      (textures&(1u<<r->nativeIndex)))return 0;
-   if(descriptorBindings[1]&(1u<<r->bindingIndex))return 0;
+      (textures&(1u<<r->nativeIndex)))A5_CONTRACT_REJECT;
+   if(descriptorBindings[1]&(1u<<r->bindingIndex))A5_CONTRACT_REJECT;
    descriptorBindings[1]|=1u<<r->bindingIndex;
    textures|=1u<<r->nativeIndex;textureBindings[r->nativeIndex]=r->bindingIndex;
   }else if(r->kind==A5MaliResourceSampler){
    if(r->stage!=2||((r->flags&A5MaliResourceImmutableSampler)?r->metalIndex!=31:r->metalIndex>=31)||r->bindingIndex>=32||r->nativeIndex>=4||r->uniformBytes||r->pushOffset||
-      (samplers&(1u<<r->nativeIndex)))return 0;
+      (samplers&(1u<<r->nativeIndex)))A5_CONTRACT_REJECT;
    samplers|=1u<<r->nativeIndex;samplerBindings[r->nativeIndex]=r->bindingIndex;
   }else if(r->kind==A5MaliResourceInputAttachment){
    if(!(p->flags&A5MaliProfileFramebufferFetch)||fetches++||r->stage!=2||r->metalIndex||
       r->bindingIndex>=32||r->nativeIndex||r->uniformBytes||r->pushOffset||
-      (descriptorBindings[1]&(1u<<r->bindingIndex)))return 0;
+      (descriptorBindings[1]&(1u<<r->bindingIndex)))A5_CONTRACT_REJECT;
    descriptorBindings[1]|=1u<<r->bindingIndex;
-  }else return 0;
+  }else A5_CONTRACT_REJECT;
  }
- if(!!(p->flags&A5MaliProfileFramebufferFetch)!=(fetches==1))return 0;
- if((p->flags&A5MaliProfileVertexColorOnly)&&(!(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly))||(p->flags&A5MaliProfileVertexTwoUV)))return 0;
- if((p->flags&A5MaliProfileFragmentTwoUV)&&(!(p->flags&A5MaliProfileVertexTwoUV)||(p->flags&A5MaliProfileFragmentNoInputs)))return 0;
+ if(!!(p->flags&A5MaliProfileFramebufferFetch)!=(fetches==1))A5_CONTRACT_REJECT;
+ if((p->flags&A5MaliProfileVertexColorOnly)&&(!(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly))||(p->flags&A5MaliProfileVertexTwoUV)))A5_CONTRACT_REJECT;
+ if((p->flags&A5MaliProfileFragmentTwoUV)&&(!(p->flags&A5MaliProfileVertexTwoUV)||(p->flags&A5MaliProfileFragmentNoInputs)))A5_CONTRACT_REJECT;
  if((p->flags&A5MaliProfileVertexNoColor)&&(!(p->flags&A5MaliProfileVertexTwoUV)||
-    (p->flags&(A5MaliProfileVertexColorOnly|A5MaliProfileDynamicColorVarying))))return 0;
- if((p->flags&A5MaliProfileFragmentNoTextures)&&(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly)))return 0;
+    (p->flags&(A5MaliProfileVertexColorOnly|A5MaliProfileDynamicColorVarying))))A5_CONTRACT_REJECT;
+ if((p->flags&A5MaliProfileFragmentNoTextures)&&(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly)))A5_CONTRACT_REJECT;
  if(p->flags&A5MaliProfileFragmentNoInputs){
   /* Constant and ordered-fetch shaders both have genuine empty interpolant
    * tables. Fetch is independently matched to a real input-attachment above. */
   if(textures||samplers||
-     (p->flags&(A5MaliProfileDynamicColorVarying|A5MaliProfileFragmentPosition|A5MaliProfileFragmentColorOnly)))return 0;
+     (p->flags&(A5MaliProfileDynamicColorVarying|A5MaliProfileFragmentPosition|A5MaliProfileFragmentColorOnly)))A5_CONTRACT_REJECT;
  }else if(p->flags&A5MaliProfileFragmentColorOnly){
   if(textures||samplers||!(p->flags&A5MaliProfileDynamicColorVarying)||
-     (p->flags&(A5MaliProfileFragmentPosition|A5MaliProfileFragmentTwoUV)))return 0;
+     (p->flags&(A5MaliProfileFragmentPosition|A5MaliProfileFragmentTwoUV)))A5_CONTRACT_REJECT;
  }else if(p->flags&A5MaliProfileFragmentNoTextures){
-  if(textures||samplers)return 0;
- }else if(!textures||textures!=samplers)return 0;
- for(unsigned i=0;i<4;i++)if((textures&(1u<<i))&&textureBindings[i]!=samplerBindings[i])return 0;
- if((p->flags&A5MaliProfileShaderBlend)&&!(p->flags&A5MaliProfileRenderState))return 0;
+  if(textures||samplers)A5_CONTRACT_REJECT;
+ }else if(!textures||textures!=samplers)A5_CONTRACT_REJECT;
+ for(unsigned i=0;i<4;i++)if((textures&(1u<<i))&&textureBindings[i]!=samplerBindings[i])A5_CONTRACT_REJECT;
+ if((p->flags&A5MaliProfileShaderBlend)&&!(p->flags&A5MaliProfileRenderState))A5_CONTRACT_REJECT;
  unsigned immutableMask=0,constantMask=0;
  for(unsigned i=0;i<p->resourceCount;i++)if(p->resources[i].kind==A5MaliResourceSampler&&
    (p->resources[i].flags&A5MaliResourceImmutableSampler))constantMask|=1u<<p->resources[i].nativeIndex;
- if(p->immutableSamplerCount>4||(p->immutableSamplerCount&&!p->immutableSamplers))return 0;
+ if(p->immutableSamplerCount>4||(p->immutableSamplerCount&&!p->immutableSamplers))A5_CONTRACT_REJECT;
  for(unsigned i=0;i<p->immutableSamplerCount;i++){
   const A5MaliCompiledSampler*s=p->immutableSamplers+i;
   if(s->nativeIndex>=4||(immutableMask&(1u<<s->nativeIndex))||s->minFilter>1||s->magFilter>1||s->mipFilter||
@@ -511,25 +516,25 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
      (s->tAddressMode!=A5RuntimeSamplerRepeat&&s->tAddressMode!=A5RuntimeSamplerClampEdge&&s->tAddressMode!=A5RuntimeSamplerClampBorder)||
      (s->rAddressMode!=A5RuntimeSamplerRepeat&&s->rAddressMode!=A5RuntimeSamplerClampEdge&&s->rAddressMode!=A5RuntimeSamplerClampBorder)||
      s->normalizedCoordinates!=1||!isfinite(s->lodMinClamp)||!isfinite(s->lodMaxClamp)||
-     s->lodMinClamp<0||s->lodMaxClamp<s->lodMinClamp||s->lodMaxClamp>15)return 0;
+     s->lodMinClamp<0||s->lodMaxClamp<s->lodMinClamp||s->lodMaxClamp>15)A5_CONTRACT_REJECT;
   immutableMask|=1u<<s->nativeIndex;
  }
- if(immutableMask!=constantMask)return 0;
+ if(immutableMask!=constantMask)A5_CONTRACT_REJECT;
  uint32_t used[2]={0};
  for(unsigned i=0;i<p->pushFieldCount;++i){const A5MaliCompiledPushField*f=p->pushFields+i;
   if((f->stage!=1&&f->stage!=2)||f->bytes!=4||f->offset>76||(f->offset&3)||
-     (used[f->stage-1]&(1u<<(f->offset/4))))return 0;
+     (used[f->stage-1]&(1u<<(f->offset/4))))A5_CONTRACT_REJECT;
   used[f->stage-1]|=1u<<(f->offset/4);
   if(f->kind==A5MaliPushBindOffset){
    unsigned match=0;
    for(unsigned j=0;j<p->resourceCount;++j){const A5MaliCompiledResource*r=p->resources+j;
     if(r->stage==f->stage&&r->kind==A5MaliResourceBuffer&&r->metalIndex==f->metalIndex&&r->pushOffset==f->offset)match++;
    }
-   if(match!=1||f->value)return 0;
-  }else if(f->kind!=A5MaliPushColorWriteRule||f->stage!=2||f->value!=0x2222||f->metalIndex)return 0;
+   if(match!=1||f->value)A5_CONTRACT_REJECT;
+  }else if(f->kind!=A5MaliPushColorWriteRule||f->stage!=2||f->value!=0x2222||f->metalIndex)A5_CONTRACT_REJECT;
  }
  for(unsigned i=0;i<p->resourceCount;++i){const A5MaliCompiledResource*r=p->resources+i;
-  if(r->kind==A5MaliResourceBuffer&&!(used[r->stage-1]&(1u<<(r->pushOffset/4))))return 0;
+  if(r->kind==A5MaliResourceBuffer&&!(used[r->stage-1]&(1u<<(r->pushOffset/4))))A5_CONTRACT_REJECT;
  }
  for(unsigned c=0;c<2;++c)for(unsigned i=0;i<8;++i){
   const A5MaliCompiledAttachmentState*a=&p->attachmentContracts[c].attachments[i];
@@ -538,13 +543,13 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
    unsigned route=A5MaliLowerRenderState(a).route;
    if(p->flags&A5MaliProfileShaderBlend){
     if(!(p->flags&A5MaliProfileDynamicStages)||route!=A5MaliStateNeedsShader||
-       a->sourceRGB>14||a->destinationRGB>14||a->sourceAlpha>14||a->destinationAlpha>14)return 0;
-   }else if(route!=A5MaliStateFixed)return 0;
+       a->sourceRGB>14||a->destinationRGB>14||a->sourceAlpha>14||a->destinationAlpha>14)A5_CONTRACT_REJECT;
+   }else if(route!=A5MaliStateFixed)A5_CONTRACT_REJECT;
    continue;
   }
   if(a->writeMask!=15||a->blendEnabled!=over||a->rgbOperation||a->alphaOperation||
      a->sourceRGB!=1||a->sourceAlpha!=1||a->destinationRGB!=(over?((p->flags&A5MaliProfileScreenBlend)?3u:5u):0u)||
-     a->destinationAlpha!=(over?((p->flags&A5MaliProfileScreenBlend)?3u:5u):0u))return 0;
+     a->destinationAlpha!=(over?((p->flags&A5MaliProfileScreenBlend)?3u:5u):0u))A5_CONTRACT_REJECT;
  }
  return 1;
 }

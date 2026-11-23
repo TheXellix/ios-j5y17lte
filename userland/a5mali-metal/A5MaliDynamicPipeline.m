@@ -539,8 +539,21 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
         e->_attachments[1].attachments[1]=attachmentState(rt1);
     }
 #if __has_include("A5MaliCompiledRegistryData.inc") || defined(A5_MALI_REQUIRE_COMPILED_REGISTRY)
-    if(!A5MaliDynamicRuntimeProfileSupported(&e->_profile))
-        return rejectPipeline(vf,ff,@"emitter.resource-graph",unsupported(@"dynamic resource graph is outside native emitter bounds"),error);
+    if(!A5MaliDynamicRuntimeProfileSupported(&e->_profile)){
+        extern unsigned a5_dynamic_contract_reject_line;
+        /* One short line per resource/attribute: the kernel console keeps
+         * only the start of long provider lines. */
+        for(unsigned i=0;i<e->_profile.resourceCount;++i){const A5MaliCompiledResource *r=e->_profile.resources+i;
+            fprintf(stderr,"A5J5 res%u k%u s%u m%u b%u n%u u%u p%u f%x w%u y%u\n",i,(unsigned)r->kind,(unsigned)r->stage,
+                (unsigned)r->metalIndex,(unsigned)r->bindingIndex,(unsigned)r->nativeIndex,(unsigned)r->uniformBytes,
+                (unsigned)r->pushOffset,(unsigned)r->flags,(unsigned)r->windowOffset,(unsigned)r->sysvalOffset);}
+        for(unsigned i=0;i<e->_profile.attributeCount;++i){const A5MaliCompiledVertexAttribute *a=e->_profile.attributes+i;
+            fprintf(stderr,"A5J5 attr%u i%u f%u o%u b%u\n",i,(unsigned)a->index,(unsigned)a->format,(unsigned)a->offset,(unsigned)a->bufferIndex);}
+        fprintf(stderr,"A5J5 prof flags=%x push=%u stride=%u line=%u\n",(unsigned)e->_profile.flags,
+            (unsigned)e->_profile.pushFieldCount,(unsigned)e->_layout.stride,a5_dynamic_contract_reject_line);
+        return rejectPipeline(vf,ff,@"emitter.resource-graph",unsupported([NSString stringWithFormat:
+            @"emitter line %u: dynamic resource graph is outside native emitter bounds",a5_dynamic_contract_reject_line]),error);
+    }
 #else
     return rejectPipeline(vf,ff,@"emitter.backend",unsupported(@"native descriptor backend unavailable"),error);
 #endif
