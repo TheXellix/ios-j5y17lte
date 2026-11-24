@@ -424,7 +424,7 @@ unsigned a5_dynamic_contract_reject_line;
 static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
  if(p->profileID!=A5MaliDynamicProfileID||
     !(p->flags&A5MaliProfileDynamicStages)||
-    (p->flags&~(A5MaliProfileDynamicStages|A5MaliProfileDynamicColorVarying|A5MaliProfileSourceOverBlend|A5MaliProfileFramebufferFetch|A5MaliProfileFragmentPosition|A5MaliProfileFragmentNoInputs|A5MaliProfileVertexColorOnly|A5MaliProfileVertexTwoUV|A5MaliProfileFragmentTwoUV|A5MaliProfileFragmentColorOnly|A5MaliProfileFragmentNoTextures|A5MaliProfileScreenBlend|A5MaliProfileRenderState|A5MaliProfileShaderBlend|A5MaliProfileVertexNoColor|A5MaliProfileShaderAnisotropy))||
+    (p->flags&~(A5MaliProfileDynamicStages|A5MaliProfileDynamicColorVarying|A5MaliProfileSourceOverBlend|A5MaliProfileFramebufferFetch|A5MaliProfileFragmentPosition|A5MaliProfileFragmentNoInputs|A5MaliProfileVertexColorOnly|A5MaliProfileVertexTwoUV|A5MaliProfileFragmentTwoUV|A5MaliProfileFragmentColorOnly|A5MaliProfileFragmentNoTextures|A5MaliProfileScreenBlend|A5MaliProfileRenderState|A5MaliProfileShaderBlend|A5MaliProfileVertexNoColor|A5MaliProfileShaderAnisotropy|A5MaliProfileVertexColorUV))||
     !(p->flags&A5MaliProfileSourceOverBlend)||p->passCount!=1||!p->passes||
     p->passes[0].passID!=p->profileID||p->passes[0].logicalTarget||
     !p->vertexName||!p->vertexName[0]||!p->fragmentName||!p->fragmentName[0]||
@@ -489,6 +489,9 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
  if(!!(p->flags&A5MaliProfileFramebufferFetch)!=(fetches==1))A5_CONTRACT_REJECT;
  if((p->flags&A5MaliProfileVertexColorOnly)&&(!(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly))||(p->flags&A5MaliProfileVertexTwoUV)))A5_CONTRACT_REJECT;
  if((p->flags&A5MaliProfileFragmentTwoUV)&&(!(p->flags&A5MaliProfileVertexTwoUV)||(p->flags&A5MaliProfileFragmentNoInputs)))A5_CONTRACT_REJECT;
+ if((p->flags&A5MaliProfileVertexColorUV)&&(p->flags&(A5MaliProfileVertexTwoUV|A5MaliProfileVertexNoColor|
+    A5MaliProfileVertexColorOnly|A5MaliProfileFragmentTwoUV|A5MaliProfileFragmentColorOnly|
+    A5MaliProfileDynamicColorVarying|A5MaliProfileFragmentPosition)))A5_CONTRACT_REJECT;
  if((p->flags&A5MaliProfileVertexNoColor)&&(!(p->flags&A5MaliProfileVertexTwoUV)||
     (p->flags&(A5MaliProfileVertexColorOnly|A5MaliProfileDynamicColorVarying))))A5_CONTRACT_REJECT;
  if((p->flags&A5MaliProfileFragmentNoTextures)&&(p->flags&(A5MaliProfileFragmentNoInputs|A5MaliProfileFragmentColorOnly)))A5_CONTRACT_REJECT;
@@ -685,7 +688,14 @@ static int resources(uint8_t*d,const A5RuntimeMiscDraw*m,int home,int clear,int 
  if((home||generic_textured)&&!(p->flags&A5MaliProfileVertexColorOnly)){
   attr(d,VS_VARY+16,2,MALI_RGBA32UI,0x688,0);buf(d,VS_VARY_BUFS+32,VA+vary,16,r->vertexCount*16);
   attr(d,VS_VARY+24,3,MALI_RG32UI,RG_SWIZZLE,0);buf(d,VS_VARY_BUFS+48,VA+vary+varyStep,8,r->vertexCount*8);
-  if(generic_textured){
+  if(generic_textured&&(p->flags&A5MaliProfileVertexColorUV)){
+   /* j5y17lte colour-first VS (VAR0 colour, VAR1 UV) as the A5 home
+    * profile above; the FS reads UV from VAR1 in its slot 0. */
+   if(!(p->flags&A5MaliProfileFragmentNoInputs)){
+    attr(d,FS_VARY,0,MALI_RG32F,RG_SWIZZLE,0);
+    buf(d,FS_VARY_BUFS,VA+vary+varyStep,8,r->vertexCount*8);
+   }
+  }else if(generic_textured){
    /* Textured VS: hardware VAR0 is UV, VAR1 is colour; FS reads VAR0. */
    attr(d,VS_VARY+16,2,MALI_RG32UI,RG_SWIZZLE,0);
    buf(d,VS_VARY_BUFS+32,VA+vary,8,r->vertexCount*8);

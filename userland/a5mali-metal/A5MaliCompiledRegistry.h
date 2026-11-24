@@ -50,7 +50,10 @@ enum { A5MaliProfileFixedViewport = 1, A5MaliProfileNearestSampler = 2,
        A5MaliProfileShaderBlend = 2097152,
        /* Reflected position/two-UV vertex program with no color input/export. */
        A5MaliProfileShaderAnisotropy = 8388608,
-       A5MaliProfileVertexNoColor = 4194304 };
+       A5MaliProfileVertexNoColor = 4194304,
+       /* j5y17lte: position/UV/colour vertex exporting colour at VAR0 and UV
+        * at VAR1 (QuartzCore std_vert1_lph); the fragment reads VAR1 only. */
+       A5MaliProfileVertexColorUV = 16777216 };
 enum { A5MaliDynamicProfileID = 65536 };
 
 typedef struct {

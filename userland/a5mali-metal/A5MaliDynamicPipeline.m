@@ -168,7 +168,8 @@ static BOOL sameStageProgram(const A5MaliCompiledProfile *p,const A5MaliCompiled
     return counts[0]==counts[1];
 }
 static BOOL vertexABI(A5MaliDynamicShaderCacheEntry *e,const A5MaliCompiledProfile *p,
-    BOOL *colorOnly,BOOL *twoUV,BOOL *noColor,NSString **reason) {
+    BOOL *colorOnly,BOOL *twoUV,BOOL *noColor,BOOL *colorUV,NSString **reason) {
+    *colorUV=NO;
     if(!e){
         if(sameStageProgram(p,A5MaliCompiledProfileForID(602),A5MaliStageVertex)){*colorOnly=YES;return YES;}
         if(sameStageProgram(p,A5MaliCompiledProfileForID(603),A5MaliStageVertex)){*colorOnly=NO;return YES;}
@@ -199,8 +200,14 @@ static BOOL vertexABI(A5MaliDynamicShaderCacheEntry *e,const A5MaliCompiledProfi
         ioShape(e.nativeABI[@"inputs"],oneUVInputs,oneUVInputBases,oneUVInputMasks,2)&&
         ioShape(e.nativeABI[@"outputs"],oneUVLocations,oneUVBases,oneUVMasks,3);
     if(uvOne){uvOnly=YES;compact=NO;}
+    /* j5y17lte: full position/UV/colour inputs, but colour exported first
+     * (VAR0 vec4) and UV second (VAR1 vec2), as QuartzCore std_vert1_lph. */
+    unsigned cuvLocations[]={0,12,32,33},cuvBases[]={0,1,2,3},cuvMasks[]={15,1,15,3};
+    BOOL cuv=attributes==3&&
+        ioShape(e.nativeABI[@"inputs"],fullInputs,fullInputBases,fullInputMasks,3)&&
+        ioShape(e.nativeABI[@"outputs"],cuvLocations,cuvBases,cuvMasks,4);
     if((attributes!=2&&attributes!=3&&attributes!=4)||
-       (!uvOnly&&(!ioShape(e.nativeABI[@"inputs"],compact?compactInputs:dual?dualInputs:fullInputs,
+       (!uvOnly&&!cuv&&(!ioShape(e.nativeABI[@"inputs"],compact?compactInputs:dual?dualInputs:fullInputs,
            compact?compactInputBases:dual?dualInputBases:fullInputBases,compact?compactInputMasks:dual?dualInputMasks:fullInputMasks,compact?2:dual?4:3)||
        !ioShape(e.nativeABI[@"outputs"],compact?compactLocations:dual?dualLocations:fullLocations,
            compact?compactBases:dual?dualBases:fullBases,compact?compactMasks:dual?dualMasks:fullMasks,compact?3:dual?5:4)))){
@@ -225,9 +232,10 @@ static BOOL vertexABI(A5MaliDynamicShaderCacheEntry *e,const A5MaliCompiledProfi
         @"input_rate":@0,@"divisor":@1,@"stride":@{@"Static":@48}}],
         @"attributes":vertexAttributes,@"pulled":@[],@"variant_pulled":@[]};
     if(![e.reflection[@"vertex_input"] isEqual:want]){*reason=@"vertex.reflected-Metal-packing";return NO;}
-    *colorOnly=compact;*twoUV=dual||uvOnly;*noColor=uvOnly;return YES;
+    *colorOnly=compact;*twoUV=dual||uvOnly;*noColor=uvOnly;*colorUV=cuv;return YES;
 }
-static BOOL fragmentABI(A5MaliDynamicShaderCacheEntry *e,BOOL *color,BOOL *fetch,BOOL *position,BOOL *noInputs,BOOL *twoUV,BOOL *colorOnly,NSString **reason) {
+static BOOL fragmentABI(A5MaliDynamicShaderCacheEntry *e,BOOL *color,BOOL *fetch,BOOL *position,BOOL *noInputs,BOOL *twoUV,BOOL *colorOnly,BOOL *uvVar1,NSString **reason) {
+    *uvVar1=NO;
     *reason=@"fragment.native-attributes-or-sampled-count";
     NSDictionary *n=e.nativeABI[@"native_info"];
     if(!interfaceABI(e)||e.stage!=A5MaliStageFragment||[n[@"attributes"] unsignedIntValue]||
@@ -269,6 +277,13 @@ static BOOL fragmentABI(A5MaliDynamicShaderCacheEntry *e,BOOL *color,BOOL *fetch
         if(*position){selectedLocations[count]=0;selectedBases[count]=3;selectedMasks[count++]=15;}
     }else for(unsigned i=0;i<3;i++)if(!*noInputs&&(!i||(i==1?*color:*position))){
         selectedLocations[count]=locations[i];selectedBases[count]=bases[i];selectedMasks[count++]=masks[i];
+    }
+    /* j5y17lte: a fragment whose only interpolant is UV in VAR1 (QuartzCore
+     * home_affordance_base_lph); it links only to a colour-first vertex. */
+    unsigned var1Locations[]={33},var1Bases[]={0},var1Masks[]={3};
+    if(!*noInputs&&ioShape(io,var1Locations,var1Bases,var1Masks,1)){
+        *uvVar1=YES;*twoUV=NO;*color=NO;*position=NO;*colorOnly=NO;
+        count=1;selectedLocations[0]=33;selectedBases[0]=0;selectedMasks[0]=3;
     }
     *reason=@"fragment.reflected-input-location-base-mask";
     if(!ioShape(io,selectedLocations,selectedBases,selectedMasks,count))return NO;
@@ -443,11 +458,14 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
         return rejectPipeline(vf,ff,@"pipeline.source-snapshot",snapshotError,error);
     const A5MaliCompiledProfile *vp=vs?NULL:A5MaliCompiledProfileForID(vf.specializationProfileID);
     const A5MaliCompiledProfile *fp=fs?NULL:A5MaliCompiledProfileForID(ff.specializationProfileID);
-    BOOL color=NO,fetch=NO,position=NO,noInputs=NO,vertexColorOnly=NO,vertexTwoUV=NO,vertexNoColor=NO,fragmentTwoUV=NO,fragmentColorOnly=NO;
+    BOOL color=NO,fetch=NO,position=NO,noInputs=NO,vertexColorOnly=NO,vertexTwoUV=NO,vertexNoColor=NO,fragmentTwoUV=NO,fragmentColorOnly=NO,vertexColorUV=NO,fragmentUVVar1=NO;
     NSString *predicate=nil;
-    BOOL vertexOK=vertexABI(vs,vp,&vertexColorOnly,&vertexTwoUV,&vertexNoColor,&predicate);
-    BOOL fragmentOK=vertexOK&&(fs?fragmentABI(fs,&color,&fetch,&position,&noInputs,&fragmentTwoUV,&fragmentColorOnly,&predicate):
+    BOOL vertexOK=vertexABI(vs,vp,&vertexColorOnly,&vertexTwoUV,&vertexNoColor,&vertexColorUV,&predicate);
+    BOOL fragmentOK=vertexOK&&(fs?fragmentABI(fs,&color,&fetch,&position,&noInputs,&fragmentTwoUV,&fragmentColorOnly,&fragmentUVVar1,&predicate):
         staticFragmentABI(fp,&color));
+    if(vertexOK&&fragmentOK&&fragmentUVVar1!=vertexColorUV&&!(vertexColorUV&&noInputs)){
+        fragmentOK=NO;predicate=@"link.colour-first-vertex-needs-VAR1-UV-fragment";
+    }
     if(vertexOK&&!fs&&!fragmentOK)predicate=@"fragment.static-native-ABI";
     if(vertexOK&&fragmentOK&&vertexColorOnly&&!noInputs&&!fragmentColorOnly){
         fragmentOK=NO;predicate=@"link.fragment-UV-input-not-exported-by-vertex";
@@ -521,7 +539,7 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
         .colorFormats={(uint32_t)target},.flags=A5MaliProfileDynamicStages|A5MaliProfileSourceOverBlend|
             ([fs.nativeABI[@"shader_anisotropy"] isEqual:@1]?A5MaliProfileShaderAnisotropy:0)|
             A5MaliProfileRenderState|(shaderBlend?A5MaliProfileShaderBlend:0)|
-            (color?A5MaliProfileDynamicColorVarying:0)|(fetch?A5MaliProfileFramebufferFetch:0)|(position?A5MaliProfileFragmentPosition:0)|(noInputs?A5MaliProfileFragmentNoInputs:0)|(vertexColorOnly?A5MaliProfileVertexColorOnly:0)|(vertexTwoUV?A5MaliProfileVertexTwoUV:0)|(vertexNoColor?A5MaliProfileVertexNoColor:0)|(fragmentTwoUV?A5MaliProfileFragmentTwoUV:0)|(fragmentColorOnly?A5MaliProfileFragmentColorOnly:0)|
+            (color?A5MaliProfileDynamicColorVarying:0)|(fetch?A5MaliProfileFramebufferFetch:0)|(position?A5MaliProfileFragmentPosition:0)|(noInputs?A5MaliProfileFragmentNoInputs:0)|(vertexColorOnly?A5MaliProfileVertexColorOnly:0)|(vertexTwoUV?A5MaliProfileVertexTwoUV:0)|(vertexNoColor?A5MaliProfileVertexNoColor:0)|(vertexColorUV?A5MaliProfileVertexColorUV:0)|(fragmentTwoUV?A5MaliProfileFragmentTwoUV:0)|(fragmentColorOnly?A5MaliProfileFragmentColorOnly:0)|
             (fs&&!noInputs&&!fragmentColorOnly&&![fs.nativeABI[@"native_info"][@"textures"] unsignedIntValue]?A5MaliProfileFragmentNoTextures:0),.passes=&e->_pass,.passCount=1,
         .resources=e->_resources,.resourceCount=resourceCount,.pushFields=e->_pushes,.pushFieldCount=pushCount,
         .attributes=e->_attributes,.attributeCount=attributeCount,.layouts=&e->_layout,.layoutCount=1,
