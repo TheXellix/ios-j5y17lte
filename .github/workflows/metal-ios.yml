@@ -63,7 +63,7 @@ jobs:
             ${{ runner.temp }}/out/midgard/build-manifest.json
             ${{ runner.temp }}/mesa-26.2.4.tar.xz
             ${{ runner.temp }}/m2v-profile.json
-          key: ios-toolchain-v2-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/misc_backend.c', 'userland/a5xelte-air-translation/families/misc_*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
+          key: ios-toolchain-v3-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/misc_backend.c', 'userland/a5xelte-air-translation/families/misc_*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
 
       - name: metal2vulkan (host + iOS)
         if: steps.tc.outputs.cache-hit != 'true'
@@ -105,7 +105,7 @@ jobs:
             ${{ runner.temp }}/out/midgard/build-manifest.json
             ${{ runner.temp }}/mesa-26.2.4.tar.xz
             ${{ runner.temp }}/m2v-profile.json
-          key: ios-toolchain-v2-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/misc_backend.c', 'userland/a5xelte-air-translation/families/misc_*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
+          key: ios-toolchain-v3-${{ runner.arch }}-${{ hashFiles('userland/a5xelte-air-translation/ios/build_*.py', 'userland/a5xelte-air-translation/ios/*.patch', 'userland/a5xelte-air-translation/spirv_pair_midgard.c', 'userland/a5xelte-air-translation/families/misc_backend.c', 'userland/a5xelte-air-translation/families/misc_*.h', 'userland/a5xelte-air-translation/generic/*.h') }}
 
       - name: Host Mesa template for the runtime encoders
         run: |
