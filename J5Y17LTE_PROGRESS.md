@@ -213,3 +213,16 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   patched OrangeFox skips the system_readonly prompt (backup in
   backup/recovery), /usr/local/sbin/j5-root-install via sudoers,
   tools/j5-cycle.sh; CI on macos-15-intel when arm64 has no capacity.
+- 2026-11-24 cycles 39-44 (unattended): soft fallback (placeholder
+  functions, no-op pipelines, skipped draws) keeps backboardd alive; first
+  iOS native GPU jobs on the T830 complete (status=0, no MMU faults); lock
+  screen clock/date drawn through Metal, unlock works but very slow (first
+  compiles of each shader on the A53 block CoreAnimation). Provider log now
+  in /private/var/tmp/a5mali-backboardd.log. Linked: fixed_vert/frag (main
+  QC shader), downsample_4/8, narrow_blur_7, single_pass_blur_3,
+  std_vert1+home_affordance (colour-first vertex). Missing: narrow_blur_11..27
+  (Midgard code 16-38 KiB and TLS 16-160 B exceed the dynamic limits of 16 KiB
+  / no TLS), path_blit (storage buffer + instancing), wallpaper (PosterBoard
+  crashes outside Metal). metal2vulkan builds and runs on the Linux host
+  (src/m2v). Next: bigger code + TLS in the emitter, parallel compiler
+  workers, precompile collected requests on the PC, batched GPU submission.
