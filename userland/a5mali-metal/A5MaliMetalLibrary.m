@@ -717,7 +717,17 @@ static NSDictionary<NSString *,NSNumber *> *libraryFunctionStages(NSData *data)
                         name.UTF8String,entry.stage,entry.shader->byteCount);
                     return [[A5MaliMetalFunction alloc]initWithLibrary:self dynamicShader:entry];
                 }
-                if(failure.code!=ENOENT){logFunctionFailure(name,requestID,failure);if(error)*error=failure;return nil;}
+                if(failure.code!=ENOENT){
+                    logFunctionFailure(name,requestID,failure);
+                    /* j5y17lte soft fallback: CoreAnimation aborts backboardd
+                     * on a nil function. A placeholder carries no native code,
+                     * so every pipeline using it becomes a no-op pipeline. */
+                    static atomic_uint placeholders;
+                    if(atomic_fetch_add_explicit(&placeholders,1,memory_order_relaxed)<64)
+                        fprintf(stderr,"A5J5 placeholder function %s\n",name.UTF8String);
+                    if(error)*error=nil;
+                    return [[A5MaliMetalFunction alloc]initWithLibrary:self name:name type:stage specializationProfileID:0];
+                }
                 if(!queued){
                     NSString *forwardedID=nil;
                     NSError *forwardError=nil;

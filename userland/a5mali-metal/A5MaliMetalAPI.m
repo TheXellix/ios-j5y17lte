@@ -261,6 +261,19 @@ static NSError *metalCommandException(NSException *exception,const char *phase,u
  return [NSError errorWithDomain:@"com.orhunnx.a5xelte.mali" code:kIOReturnNotReady
   userInfo:@{NSLocalizedDescriptionKey:reason,@"phase":[NSString stringWithUTF8String:phase]}];
 }
+/* j5y17lte soft fallback: a pipeline QuartzCore needs but the T830 path
+ * cannot run yet (shader family without a native lowering, ...). Returning
+ * nil makes CoreAnimation abort backboardd; this object is accepted and its
+ * draws are skipped, so the UI comes up and the gaps are logged by name. */
+@interface A5MaliNoopPipeline : A5MaliReadSurfCandidate
+- (instancetype)initWithDevice:(A5MaliRestrictedDevice *)device shaderPair:(NSString *)pair;
+- (NSString *)shaderPair;
+@end
+@implementation A5MaliNoopPipeline { NSString *_shaderPair; }
+- (instancetype)initWithDevice:(A5MaliRestrictedDevice *)device shaderPair:(NSString *)pair
+{ if((self=[super initWithDevice:device]))_shaderPair=[pair copy]; return self; }
+- (NSString *)shaderPair { return _shaderPair; }
+@end
 @interface A5MaliCompiledPipeline : A5MaliReadSurfCandidate
 @property (nonatomic, readonly) const A5MaliCompiledProfile *profile;
 @property (nonatomic, readonly) BOOL sourceOver;
@@ -388,7 +401,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     A5MaliMetalTexture *_inactiveColor1;
     A5MaliMetalTexture *_source;
     A5MaliReadSurfCandidate *_pipeline;
-    BOOL _ended, _hasDraw, _hasViewport;
+    BOOL _ended, _hasDraw, _hasViewport, _noopPipeline;
+    NSString *_noopPair;
     MTLViewport _viewport;
     MTLScissorRect _scissor;
     A5MaliDrawBlendColor _blendColor;
@@ -535,8 +549,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     }
     A5MaliLogPipelineRejection("factory",descriptor,0,rejection.localizedDescription);
     logPipelineDecision(self,descriptor,profileID,NO,rejection.localizedDescription);
-    if(error)*error=rejection;
-    return nil;
+    NSString *pair=[NSString stringWithFormat:@"%@+%@",[vertex name]?:@"?",[fragment name]?:@"?"];
+    static atomic_uint noops;
+    if(atomic_fetch_add_explicit(&noops,1,memory_order_relaxed)<64)
+        fprintf(stderr,"A5J5 noop pipeline %s\n",pair.UTF8String);
+    if(error)*error=nil;
+    return [[A5MaliNoopPipeline alloc]initWithDevice:self shaderPair:pair];
 }
 
 
@@ -1290,6 +1308,10 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
 
 - (void)setRenderPipelineState:(A5MaliReadSurfCandidate *)pipeline
 {
+    if([pipeline isKindOfClass:[A5MaliNoopPipeline class]]&&!_ended&&pipeline.device==_buffer.device){
+        _noopPipeline=YES;_noopPair=((A5MaliNoopPipeline *)pipeline).shaderPair;return;
+    }
+    _noopPipeline=NO;
     if (_ended || ![pipeline isKindOfClass:[A5MaliReadSurfCandidate class]] ||
         pipeline.device != _buffer.device || (_hasDraw &&
         [_pipeline isKindOfClass:[A5MaliCompiledPipeline class]]!=[pipeline isKindOfClass:[A5MaliCompiledPipeline class]]))
@@ -2088,9 +2110,17 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
 #endif
 }
 
+- (void)skipNoopDraw
+{
+    [_buffer noteDrawCall];
+    static atomic_uint skipped;
+    unsigned k=atomic_fetch_add_explicit(&skipped,1,memory_order_relaxed);
+    if(k<32||!(k%256))fprintf(stderr,"A5J5 noop draw %u %s\n",k,_noopPair.UTF8String?:"?");
+}
 - (void)drawPrimitives:(MTLPrimitiveType)primitiveType
           vertexStart:(NSUInteger)vertexStart vertexCount:(NSUInteger)vertexCount
 {
+    if(_noopPipeline){[self skipNoopDraw];return;}
     [_buffer noteDrawCall];
     if ([_pipeline isKindOfClass:[A5MaliCompiledPipeline class]]) {
         if (_ended || vertexStart || ![self encodeCompiledDraw:primitiveType vertexCount:vertexCount]) {
@@ -2112,7 +2142,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
 }
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start
     vertexCount:(NSUInteger)count instanceCount:(NSUInteger)instances
-{ if(instances!=1){[_buffer noteDrawCall];[_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];}else[self drawPrimitives:type vertexStart:start vertexCount:count]; }
+{
+    if(_noopPipeline){[self skipNoopDraw];return;} if(instances!=1){[_buffer noteDrawCall];[_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];}else[self drawPrimitives:type vertexStart:start vertexCount:count]; }
 
 /* Bounded metadata only: a nearby pipeline log does not identify this draw.
  * Record the actual retained pipeline and arguments at every rejection. */
@@ -2129,6 +2160,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     indexType:(MTLIndexType)indexType indexBuffer:(A5MaliPrivateBuffer *)indexBuffer
     indexBufferOffset:(NSUInteger)offset
 {
+    if(_noopPipeline){[self skipNoopDraw];return;}
     [_buffer noteDrawCall];
     NSUInteger width=indexType==MTLIndexTypeUInt16?2:indexType==MTLIndexTypeUInt32?4:0;
     const char *reason=_ended?"ended":!width?"index-type":
@@ -2159,6 +2191,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     indexType:(MTLIndexType)indexType indexBuffer:(A5MaliPrivateBuffer *)indexBuffer
     indexBufferOffset:(NSUInteger)offset instanceCount:(NSUInteger)instances
 {
+    if(_noopPipeline){[self skipNoopDraw];return;}
     [self drawIndexedPrimitives:type indexCount:count indexType:indexType indexBuffer:indexBuffer
         indexBufferOffset:offset instanceCount:instances baseVertex:0 baseInstance:0];
 }
@@ -2167,6 +2200,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     indexBufferOffset:(NSUInteger)offset instanceCount:(NSUInteger)instances
     baseVertex:(NSInteger)baseVertex baseInstance:(NSUInteger)baseInstance
 {
+    if(_noopPipeline){[self skipNoopDraw];return;}
     if(instances!=1 || baseVertex || baseInstance){
         [self logIndexedRejection:instances!=1?"instances":baseVertex?"base-vertex":"base-instance"
             primitive:type count:count indexType:indexType buffer:indexBuffer offset:offset];
@@ -2189,7 +2223,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
 -(void)drawIndexedPatches:(NSUInteger)numberOfPatchControlPoints patchStart:(NSUInteger)patchStart patchCount:(NSUInteger)patchCount patchIndexBuffer:(nullable id <MTLBuffer>)patchIndexBuffer patchIndexBufferOffset:(NSUInteger)patchIndexBufferOffset controlPointIndexBuffer:(id <MTLBuffer>)controlPointIndexBuffer controlPointIndexBufferOffset:(NSUInteger)controlPointIndexBufferOffset instanceCount:(NSUInteger)instanceCount baseInstance:(NSUInteger)baseInstance
 { [self rejectUnsupportedSelector:_cmd]; }
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)primitiveType indexType:(MTLIndexType)indexType indexBuffer:(id <MTLBuffer>)indexBuffer indexBufferOffset:(NSUInteger)indexBufferOffset indirectBuffer:(id <MTLBuffer>)indirectBuffer indirectBufferOffset:(NSUInteger)indirectBufferOffset
-{ [self rejectUnsupportedSelector:_cmd]; }
+{
+    if(_noopPipeline){[self skipNoopDraw];return;} [self rejectUnsupportedSelector:_cmd]; }
 - (void)drawMeshThreadgroups:(MTLSize)threadgroupsPerGrid threadsPerObjectThreadgroup:(MTLSize)threadsPerObjectThreadgroup threadsPerMeshThreadgroup:(MTLSize)threadsPerMeshThreadgroup
 { [self rejectUnsupportedSelector:_cmd]; }
 - (void)drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)indirectBuffer indirectBufferOffset:(NSUInteger)indirectBufferOffset threadsPerObjectThreadgroup:(MTLSize)threadsPerObjectThreadgroup threadsPerMeshThreadgroup:(MTLSize)threadsPerMeshThreadgroup
@@ -2201,9 +2236,11 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
 -(void)drawPatches:(NSUInteger)numberOfPatchControlPoints patchStart:(NSUInteger)patchStart patchCount:(NSUInteger)patchCount patchIndexBuffer:(nullable id <MTLBuffer>)patchIndexBuffer patchIndexBufferOffset:(NSUInteger)patchIndexBufferOffset instanceCount:(NSUInteger)instanceCount baseInstance:(NSUInteger)baseInstance
 { [self rejectUnsupportedSelector:_cmd]; }
 - (void)drawPrimitives:(MTLPrimitiveType)primitiveType indirectBuffer:(id <MTLBuffer>)indirectBuffer indirectBufferOffset:(NSUInteger)indirectBufferOffset
-{ [self rejectUnsupportedSelector:_cmd]; }
+{
+    if(_noopPipeline){[self skipNoopDraw];return;} [self rejectUnsupportedSelector:_cmd]; }
 - (void)drawPrimitives:(MTLPrimitiveType)primitiveType vertexStart:(NSUInteger)vertexStart vertexCount:(NSUInteger)vertexCount instanceCount:(NSUInteger)instanceCount baseInstance:(NSUInteger)baseInstance
 {
+    if(_noopPipeline){[self skipNoopDraw];return;}
     if (baseInstance) { [self rejectUnsupportedSelector:_cmd]; return; }
     [self drawPrimitives:primitiveType vertexStart:vertexStart
         vertexCount:vertexCount instanceCount:instanceCount];
