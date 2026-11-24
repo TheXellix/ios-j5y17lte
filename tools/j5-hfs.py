@@ -10,8 +10,7 @@ partition in TWRP (adb exec-out dd, J5 serial only).
   j5-hfs.py SOURCE pull PATH OUTDIR   copy a directory tree
 SOURCE is an image path or "phone".
 
-Limits: plain data forks with at most 8 extents (no extents-overflow or
-decmpfs-compressed files, which are reported); the journal is not
+Limits: decmpfs-compressed files are reported, not read; the journal is not
 replayed, so after a forced reboot the very latest metadata may be missing.
 """
 import os
@@ -72,15 +71,44 @@ class Volume:
             raise SystemExit('not an HFS+ volume')
         self.bs = struct.unpack_from('>I', vh, 0x28)[0]
         self.catalog = fork(vh[0x110:0x160])
-        self.nodes = self.read_fork(*self.catalog)
+        self.overflow = None
+        self.overflow_fork = fork(vh[0xc0:0x110])
+        self.nodes = self.read_fork(*self.catalog, file_id=4)
         self.records = list(self.leaves())
 
-    def read_fork(self, size, extents):
+    def overflow_extents(self, file_id):
+        """Extra data-fork extents of file_id from the extents B-tree."""
+        if self.overflow is None:
+            size, ext = self.overflow_fork
+            raw = bytearray()
+            for start, count in ext:
+                raw += self.dev.read(start * self.bs, count * self.bs)
+            self.overflow = {}
+            raw = bytes(raw[:size])
+            if size:
+                node_size = struct.unpack_from('>H', raw, 14 + 18)[0]
+                node = struct.unpack_from('>I', raw, 14 + 10)[0]
+                while node:
+                    n = raw[node * node_size:(node + 1) * node_size]
+                    flink, _, kind, _, count = struct.unpack_from('>IIbBH', n, 0)
+                    for i in range(count):
+                        off = struct.unpack_from('>H', n, node_size - 2 * (i + 1))[0]
+                        klen, ftype, _, fid, sblock = struct.unpack_from('>HBBII', n, off)
+                        if ftype == 0:
+                            recs = [struct.unpack_from('>II', n, off + 2 + klen + 8 * j) for j in range(8)]
+                            self.overflow.setdefault(fid, []).append((sblock, [r for r in recs if r[1]]))
+                    node = flink
+        return [e for _, ext in sorted(self.overflow.get(file_id, [])) for e in ext]
+
+    def read_fork(self, size, extents, file_id=None):
         out = bytearray()
         for start, count in extents:
             out += self.dev.read(start * self.bs, count * self.bs)
+        if len(out) < size and file_id is not None:
+            for start, count in self.overflow_extents(file_id):
+                out += self.dev.read(start * self.bs, count * self.bs)
         if len(out) < size:
-            raise IOError('fork needs the extents overflow file')
+            raise IOError('fork extents incomplete')
         return bytes(out[:size])
 
     def leaves(self):
@@ -122,7 +150,7 @@ class Volume:
         if bsd_flags & 0x20:
             raise IOError('decmpfs-compressed file')
         _ = flags
-        return self.read_fork(*fork(rec[88:168]))
+        return self.read_fork(*fork(rec[88:168]), file_id=struct.unpack_from('>I', rec, 8)[0])
 
 
 def mtime(rec):

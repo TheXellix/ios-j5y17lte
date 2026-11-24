@@ -161,7 +161,10 @@ static int a5_dynamic_analyze(nir_shader *nir,const struct a5_dynamic_profile *p
             /* UniformWords represents a bounded byte window in uint32 words.
              * The runtime copies only logical bytes and zero-pads the final
              * word; a two-byte half still occupies one native UBO word. */
-            if(bound==2)bound=4;
+            /* j5y17lte: the same holds for any odd tail (QuartzCore blur
+             * parameters are 82 bytes of halves; NIR merges the last two
+             * halves into one 32-bit load at 80..84). */
+            bound=(bound+3u)&~3u;
          }
          if(offset>bound || bytes>bound-offset){fprintf(stderr,"dynamic UBO bound index=%u offset=%u bytes=%u bound=%u\n",ubo,offset,bytes,bound);return 0;}
          info->ubo_bytes[ubo]=MAX2(info->ubo_bytes[ubo],offset+bytes);
