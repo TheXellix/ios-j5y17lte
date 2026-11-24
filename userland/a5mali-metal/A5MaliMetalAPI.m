@@ -25,6 +25,32 @@
 #include <stdio.h>
 #include "A5MaliResourcePlan.h"
 #include "A5MaliTiming.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#ifndef A5_MALI_HOST_TEST
+/* j5y17lte: backboardd's stderr is /dev/null, so provider diagnostics
+ * (pipeline decisions, noop pipelines, dynamic link rejections) were lost.
+ * When stderr is not a regular file, append it to a per-process file under
+ * /private/var/tmp that the PC reads back from TWRP (tools/j5-hfs.py).
+ * Bounded: a file over 4 MiB is truncated on the next load. */
+__attribute__((constructor)) static void a5j5RedirectProviderLog(void)
+{
+    struct stat st;
+    if(!fstat(2,&st)&&S_ISREG(st.st_mode))return;
+    const char *name=getprogname();
+    char path[160];
+    snprintf(path,sizeof(path),"/private/var/tmp/a5mali-%s.log",name&&*name?name:"process");
+    int flags=O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW|O_CLOEXEC;
+    if(!stat(path,&st)&&st.st_size>4*1024*1024)flags|=O_TRUNC;
+    int fd=open(path,flags,0644);
+    if(fd<0)return;
+    if(fd!=2){dup2(fd,2);close(fd);}
+    setvbuf(stderr,NULL,_IOLBF,0);
+    fprintf(stderr,"A5J5 provider log start pid=%d\n",getpid());
+}
+#endif
 /* A build without authenticated compiled profiles exposes only the legacy
  * typed read_surf path and has no dependency on a native descriptor backend. */
 #if __has_include("A5MaliCompiledRegistryData.inc") || defined(A5_MALI_REQUIRE_COMPILED_REGISTRY)
