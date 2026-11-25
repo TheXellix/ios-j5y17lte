@@ -55,6 +55,31 @@ static uint64_t a5j5ThreadStorageHandle(A5MaliClient *client)
  * When stderr is not a regular file, append it to a per-process file under
  * /private/var/tmp that the PC reads back from TWRP (tools/j5-hfs.py).
  * Bounded: a file over 4 MiB is truncated on the next load. */
+static int a5j5LogFile=-1;
+static uint64_t a5j5LogStart;
+static void *a5j5LogReader(void *arg)
+{
+    int source=*(int *)arg;
+    char in[4096],line[4300];size_t used=0;int fresh=1;
+    for(;;){
+        ssize_t n=read(source,in,sizeof(in));
+        if(n<=0){if(n<0&&errno==EINTR)continue;break;}
+        for(ssize_t i=0;i<n;i++){
+            if(fresh){
+                uint64_t now=clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-a5j5LogStart;
+                used=(size_t)snprintf(line,sizeof(line),"[%llu.%03llu] ",
+                    (unsigned long long)(now/1000000000ull),(unsigned long long)(now/1000000ull%1000ull));
+                fresh=0;
+            }
+            if(used<sizeof(line)-1)line[used++]=in[i];
+            if(in[i]=='\n'||used>=sizeof(line)-1){
+                if(in[i]!='\n')line[used++]='\n';
+                (void)!write(a5j5LogFile,line,used);used=0;fresh=1;
+            }
+        }
+    }
+    return NULL;
+}
 __attribute__((constructor)) static void a5j5RedirectProviderLog(void)
 {
     struct stat st;
@@ -66,7 +91,20 @@ __attribute__((constructor)) static void a5j5RedirectProviderLog(void)
     if(!stat(path,&st)&&st.st_size>4*1024*1024)flags|=O_TRUNC;
     int fd=open(path,flags,0644);
     if(fd<0)return;
-    if(fd!=2){dup2(fd,2);close(fd);}
+    a5j5LogFile=fd;a5j5LogStart=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    /* Every line gets "[seconds.ms since load]" from a reader thread on a
+     * pipe, so per-frame costs (compile waits, encoding, GPU fences) can be
+     * measured from TWRP. Falls back to the plain file without a pipe. */
+    int pipefd[2];
+    pthread_t reader;
+    if(!pipe(pipefd)){
+        fcntl(pipefd[0],F_SETFD,FD_CLOEXEC);
+        static int source;source=pipefd[0];
+        if(!pthread_create(&reader,NULL,a5j5LogReader,&source)){
+            pthread_detach(reader);
+            dup2(pipefd[1],2);close(pipefd[1]);
+        }else{close(pipefd[0]);close(pipefd[1]);dup2(fd,2);close(fd);}
+    }else{dup2(fd,2);close(fd);}
     setvbuf(stderr,NULL,_IOLBF,0);
     fprintf(stderr,"A5J5 provider log start pid=%d\n",getpid());
 }
