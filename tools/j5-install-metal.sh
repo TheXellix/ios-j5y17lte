@@ -88,10 +88,10 @@ print('launchd cache: %d jobs, compiler job added' % len(jobs))
 PY
 chmod 0644 "$root$xpc/launchd.plist"
 
-# Accessibility > Reduce Transparency (default on, J5_REDUCE_TRANSPARENCY=0
-# leaves it): CoreAnimation draws solid materials instead of the large blur
-# passes, which the T830 path cannot run yet and which cost the most GPU.
-if [ "${J5_REDUCE_TRANSPARENCY:-1}" = 1 ]; then
+# Optional Accessibility > Reduce Transparency (J5_REDUCE_TRANSPARENCY=1;
+# off by default, the user keeps the real materials): CoreAnimation then
+# draws solid materials instead of the large blur passes.
+if [ "${J5_REDUCE_TRANSPARENCY:-0}" = 1 ]; then
 	echo "== reduce transparency"
 	ax=/private/var/mobile/Library/Preferences/com.apple.Accessibility.plist
 	python3 "$hfs" "$img" get "$ax" "$tmp/ax.plist" 2>/dev/null || rm -f "$tmp/ax.plist"
