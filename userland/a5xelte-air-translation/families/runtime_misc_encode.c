@@ -871,12 +871,12 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
  unsigned fragmentCode=dynamic&&fs->byteCount>0x4000?HUGE_FS_CODE:dynamic&&fs->byteCount>0x2000?BIG_FS_CODE:FS_CODE;
  memcpy(d+VS_CODE,vs->bytes,vs->byteCount);memcpy(d+fragmentCode,fs->bytes,fs->byteCount);
  unsigned fmt=out->metalPixelFormat==115?2:out->metalPixelFormat==10?1:out->metalPixelFormat==30?3:out->metalPixelFormat==43?4:0;
- /* j5y17lte: the T830 MFBD render target preloads the existing image into
-  * the tile buffer itself. The A5 path drew it back as a full-screen
-  * textured TILER job before every draw (a second full-screen pass);
-  * A5J5_TEXTURED_PRELOAD=1 restores that path. */
+ /* j5y17lte: the T830 MFBD render target can preload the existing image
+  * into the tile buffer itself instead of the A5's full-screen textured
+  * TILER job per draw. Opt-in (A5J5_NATIVE_PRELOAD=1): cycle 49 faulted
+  * with TILE_RANGE_FAULT (js_status 0x58) on the first native draw. */
  static int nativePreload=-1;
- if(nativePreload<0)nativePreload=!getenv("A5J5_TEXTURED_PRELOAD");
+ if(nativePreload<0)nativePreload=getenv("A5J5_NATIVE_PRELOAD")!=NULL;
  framebuffer(d,r->descriptorGPUVA,fmt,out,tlsShift,tlsBase,nativePreload);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
   p->flags&A5MaliProfileInlineSourceOver?0:r->blend);
  if(r->blend==A5RuntimeBlendState){
