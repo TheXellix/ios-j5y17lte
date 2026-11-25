@@ -6,6 +6,19 @@
 #include <dirent.h>
 #include "../../a5mali-metal/A5MaliShaderSpool.h"
 
+/* j5y17lte: parallel compile workers. The --serve process (worker 0)
+ * spawns --serve-worker I N copies; every request belongs to exactly one
+ * worker by its digest, so no two processes touch the same key. Shared
+ * cleanup/maintenance stays with worker 0. */
+static unsigned a5WorkerIndex=0,a5WorkerCount=1;
+static BOOL a5WorkerOwns(NSString *key)
+{
+    if(a5WorkerCount<=1)return YES;
+    unsigned byte=0;
+    if(key.length<2||sscanf(key.UTF8String,"%2x",&byte)!=1)return NO;
+    return byte%a5WorkerCount==a5WorkerIndex;
+}
+
 #ifndef A5_SHADER_HOST_TEST
 static NSString *const requestRoot = @"/private/var/tmp/a5mali-shader-requests";
 static NSString *const publishedRoot = @"/private/var/tmp/a5mali-shader-compiled";
@@ -13,6 +26,7 @@ static NSString *const publishedRoot = @"/private/var/tmp/a5mali-shader-compiled
 #ifndef A5_TEST_REQUESTS
 #define A5_TEST_REQUESTS "/private/tmp/a5shader-host-unused-requests"
 #endif
+
 #ifndef A5_TEST_PUBLISHED
 #define A5_TEST_PUBLISHED "/private/tmp/a5shader-host-unused-published"
 #endif
@@ -1280,18 +1294,6 @@ static void (*a5ScanAfterSnapshot)(void);
 static void (*a5ScanBeforeOldHandler)(NSDictionary *);
 #endif
 
-/* j5y17lte: parallel compile workers. The --serve process (worker 0)
- * spawns --serve-worker I N copies; every request belongs to exactly one
- * worker by its digest, so no two processes touch the same key. Shared
- * cleanup/maintenance stays with worker 0. */
-static unsigned a5WorkerIndex=0,a5WorkerCount=1;
-static BOOL a5WorkerOwns(NSString *key)
-{
-    if(a5WorkerCount<=1)return YES;
-    unsigned byte=0;
-    if(key.length<2||sscanf(key.UTF8String,"%2x",&byte)!=1)return NO;
-    return byte%a5WorkerCount==a5WorkerIndex;
-}
 static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfiles)
 {
     static unsigned scans;
