@@ -25,6 +25,26 @@
 #include <stdio.h>
 #include "A5MaliResourcePlan.h"
 #include "A5MaliTiming.h"
+#include "A5MaliNativeUpload.h"
+#include <pthread.h>
+/* j5y17lte: one TLS buffer per native client, created on first use and kept
+ * for the process lifetime (A5RuntimeTLSBytes covers 256 threads x 256 B). */
+static uint64_t a5j5ThreadStorageHandle(A5MaliClient *client)
+{
+    static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+    static A5MaliClient *owner;static uint64_t handle;
+    pthread_mutex_lock(&lock);
+    if(owner!=client||!handle){
+        static const uint8_t zero[16];uint64_t created=0;
+        if(A5MaliCreateNativeBuffer(client,A5RuntimeTLSBytes,zero,sizeof(zero),&created)==KERN_SUCCESS&&created){
+            owner=client;handle=created;
+            fprintf(stderr,"A5J5 TLS buffer created bytes=%u\n",(unsigned)A5RuntimeTLSBytes);
+        }else handle=0;
+    }
+    uint64_t result=handle;
+    pthread_mutex_unlock(&lock);
+    return result;
+}
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -2045,6 +2065,16 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                     diagnosticID,samplerSnapshots.values[0].normalizedCoordinates,samplerSnapshots.values[0].minFilter,
                     samplerSnapshots.values[0].magFilter,samplerSnapshots.values[0].mipFilter);
             }
+            /* j5y17lte: stages that spill registers (large QuartzCore blurs)
+             * get the client's shared TLS buffer as one more native buffer. */
+            int tlsIndex=-1;
+            for(uint32_t pass=0;pass<profile->passCount;++pass)
+                if(profile->passes[pass].vertex.tlsBytes||profile->passes[pass].fragment.tlsBytes){
+                    uint64_t tls=a5j5ThreadStorageHandle(client);
+                    if(!tls)return kIOReturnNoMemory;
+                    if(bufferCount==A5NativeSlots)return kIOReturnNoResources;
+                    tlsIndex=(int)bufferCount;query.buffers[bufferCount++]=tls;break;
+                }
             for(uint32_t pass=0;pass<profile->passCount;++pass){
                 A5NativeQueryResult mapped={0};kern_return_t kr=A5MaliQueryNative(client,&query,&mapped);
                 logNativePhase(diagnosticID,path?"path-query17":"misc-query17",profile->profileID,kr);if(kr)return kr;
@@ -2095,6 +2125,11 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                             mapped.buffers[i].gpuVA>UINT64_MAX-offset)return kIOReturnBadArgument;
                         b->gpuVA=mapped.buffers[i].gpuVA+offset;
                     }
+                if(tlsIndex>=0){
+                    A5NativeSpan s=mapped.buffers[tlsIndex];
+                    if(!s.gpuVA||s.bytes<A5RuntimeTLSBytes)return kIOReturnNoResources;
+                    command.draw.threadStorage=(A5RuntimeBuffer){s.gpuVA,s.bytes,0,NULL};
+                }
                 NSMutableData *jobs=[NSMutableData dataWithLength:A5RuntimeJobBytes];
                 int encoded;
                 if(path){

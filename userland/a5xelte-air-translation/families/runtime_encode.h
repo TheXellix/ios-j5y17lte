@@ -16,6 +16,8 @@ enum { A5RuntimeJobBytes=0x40000, A5RuntimeMaxVertices=256,
        A5RuntimeMaxIndices=1536,
        A5RuntimeVertexOffset=0, A5RuntimeTilerOffset=0x100,
        A5RuntimeFragmentOffset=0x200 };
+/* T830: 256 threads per core, one core, up to 256 TLS bytes per thread. */
+enum { A5RuntimeTLSBytes=0x20000, A5RuntimeTLSMaxPerThread=256 };
 enum { A5RuntimeOK=0, A5RuntimeInvalid=1, A5RuntimeUnsupported=2,
        A5RuntimeBounds=3 };
 enum { A5RuntimeLine=1, A5RuntimeLineStrip=2,
@@ -55,6 +57,10 @@ typedef struct {
      * emitted as an SFBD writeback or advertised as general MRT support. */
     A5RuntimeImage inactiveColor1;
     uint32_t hasInactiveColor1;
+    /* j5y17lte: thread-local storage for stages that spill registers
+     * (large QuartzCore blurs). Mapped by the kernel like any other native
+     * buffer; at least A5RuntimeTLSBytes. Zero when no stage needs TLS. */
+    A5RuntimeBuffer threadStorage;
     /* The application bindings, indexed by the ORIGINAL Metal slot number.
      * offset is the actual set*Buffer:offset: value, never folded into GPUVA. */
     A5RuntimeBuffer vertexBuffers[31], fragmentBuffers[31];

@@ -486,7 +486,9 @@ static int compile(const char *input,const char *output,mesa_shader_stage stage,
       fprintf(stderr,"unsupported dynamic live resource or IO ABI\n");
       util_dynarray_fini(&binary);ralloc_free(nir);return 2;
    }
-   if(dynamic && (!binary.size || binary.size>(stage==MESA_SHADER_FRAGMENT?16384u:8192u) || info.tls_size || info.wls_size ||
+   /* j5y17lte: the T830 emitter takes fragments up to 44 KiB and maps TLS
+    * (<=256 bytes per thread) for spilling stages (large QuartzCore blurs). */
+   if(dynamic && (!binary.size || binary.size>(stage==MESA_SHADER_FRAGMENT?45056u:8192u) || info.tls_size>256 || info.wls_size ||
       info.work_reg_count>16 || info.texture_count>4 || info.ubo_count>8)){
       fprintf(stderr,"unsupported dynamic native limits bytes=%u tls=%u wls=%u regs=%u textures=%u ubos=%u\n",
          binary.size,info.tls_size,info.wls_size,info.work_reg_count,info.texture_count,info.ubo_count);

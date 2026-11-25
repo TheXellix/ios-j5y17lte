@@ -270,7 +270,7 @@ static BOOL payload(id p) {
     NSDictionary *info = a[@"native_info"];
     if (![info isKindOfClass:NSDictionary.class] || !exact(info[@"bytes"], _shader.byteCount) ||
         !exact(info[@"first_tag"], _shader.firstTag) || !exact(info[@"work_regs"], _shader.workRegisters) ||
-        !exact(info[@"tls"], 0) || !exact(info[@"wls"], 0) || !number(info[@"attributes"], 16) ||
+        !number(info[@"tls"], 256) || !exact(info[@"wls"], 0) || !number(info[@"attributes"], 16) ||
         !number(info[@"ubos"], 8) || !number(info[@"textures"], 8) || !number(info[@"samplers"], 8))
         return NO;
     for (NSString *k in @[ @"inputs", @"outputs" ]) {
@@ -638,16 +638,19 @@ A5MaliDynamicShaderCacheEntry *A5MaliLoadDynamicShaderStage(NSString *requestID,
         id n = r[@"native"], f = r[@"reflection"];
         if (![n isKindOfClass:NSDictionary.class] || ![f isKindOfClass:NSDictionary.class] ||
             ![n[@"file"] isEqual:@"stage.midgard"] || ![f[@"file"] isEqual:@"reflection.json"] ||
-            !number(n[@"bytes"], [functionPayload[@"compiler_abi"] isEqual:@2]?16384:8192) || ![n[@"bytes"] unsignedIntValue] ||
+            !number(n[@"bytes"], [functionPayload[@"stage"] isEqual:@"fragment"]?45056:8192) || ![n[@"bytes"] unsignedIntValue] ||
             ([n[@"bytes"] unsignedIntValue] & 15) || (!number(n[@"first_tag"],15)||[n[@"first_tag"] unsignedIntValue]<2||
              [n[@"first_tag"] unsignedIntValue]==6||[n[@"first_tag"] unsignedIntValue]==7) ||
             !number(n[@"work_registers"], 16) || ![n[@"work_registers"] unsignedIntValue] ||
-            !exact(n[@"tls_bytes"], 0) || !exact(n[@"wls_bytes"], 0) || !hex(n[@"sha256"], 64) ||
+            !number(n[@"tls_bytes"], 256) || !exact(n[@"wls_bytes"], 0) || !hex(n[@"sha256"], 64) ||
             !number(f[@"bytes"], 256 * 1024) || ![f[@"bytes"] unsignedIntValue] || !hex(f[@"sha256"], 64)) {
             close(dir);
             return fail(error, EINVAL, @"dynamic stage code/metadata bounds rejected");
         }
-        NSData *code = readFile(dir, "stage.midgard", [functionPayload[@"compiler_abi"] isEqual:@2]?16384:8192, error);
+        /* j5y17lte: large QuartzCore blur fragments reach 37 KiB and spill
+         * up to 160 TLS bytes; the emitter places them in its 44 KiB region
+         * and maps a shared TLS buffer. */
+        NSData *code = readFile(dir, "stage.midgard", [functionPayload[@"stage"] isEqual:@"fragment"]?45056:8192, error);
         NSData *reflect = code ? readFile(dir, "reflection.json", 256 * 1024, error) : nil;
         close(dir);
         if (!code || !reflect) {

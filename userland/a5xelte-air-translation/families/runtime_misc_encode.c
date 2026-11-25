@@ -22,7 +22,8 @@ enum { SIZE=0x40000, W=32,H=32, FB=0x300,VS_RSD=0x500,FS_RSD=0x540,
  DYNAMIC_TEX=0x4000,DYNAMIC_TEX_TABLE=0x4100,DYNAMIC_SAMPLERS=0x4140,
  MIP_TEX=0x4200,MIP_TEX_STRIDE=256,
  HEAP=0x10000,HEAP_SIZE=0x10000,SOURCE=0x20000,LUT=0x22000,
- DEST=0x24000,GUARDS=0x28000 };
+ DEST=0x24000,GUARDS=0x28000,HUGE_FS_CODE=0x35000 };
+_Static_assert(HUGE_FS_CODE+0xb000<=SIZE,"huge fragment code inside the job");
 enum { RG_SWIZZLE=MALI_CHANNEL_R|(MALI_CHANNEL_G<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_1<<9),
  A_SWIZZLE=MALI_CHANNEL_0|(MALI_CHANNEL_0<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_R<<9),
  R_SWIZZLE=MALI_CHANNEL_R|(MALI_CHANNEL_0<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_1<<9) };
@@ -63,9 +64,10 @@ static void buf(uint8_t*d,unsigned at,uint64_t address,unsigned stride,unsigned 
   c.pointer=address;c.stride=stride;c.size=bytes;
  }
 }
-static void framebuffer(uint8_t*d,uint64_t VA,unsigned format,const A5RuntimeImage*out){
- /* j5y17lte T830: v5 MFBD + render target (runtime_fb_v5.h); TLS/WLS zero. */
- A5FbV5 f={.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
+static void framebuffer(uint8_t*d,uint64_t VA,unsigned format,const A5RuntimeImage*out,unsigned tlsShift,uint64_t tlsBase){
+ /* j5y17lte T830: v5 MFBD + render target (runtime_fb_v5.h); WLS zero, TLS
+  * only for spilling dynamic stages (Panfrost stack shift, shared buffer). */
+ A5FbV5 f={.tls_size=tlsShift,.tls_base=tlsBase,.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
   .internal_format=format==2?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:
      format==4?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R5G5B5A1:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8,
   .swizzle=format==0||format==4?0x60a:0x688,
@@ -846,14 +848,30 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
  if(!r->scissorWidth||!r->scissorHeight||r->scissorX>=out->width||r->scissorY>=out->height||
    r->scissorWidth>out->width-r->scissorX||r->scissorHeight>out->height-r->scissorY)return A5RuntimeBounds;
  const A5MaliCompiledShader*vs=&pass->vertex,*fs=&pass->fragment;
- if(!vs->bytes||!fs->bytes||!vs->byteCount||vs->byteCount>(dynamic?0x2000u:0x1000u)||!fs->byteCount||fs->byteCount>(dynamic&&(p->flags&A5MaliProfileShaderAnisotropy)?0x4000u:dynamic?0x2000u:0x1000u)||
-   (vs->byteCount&15)||(fs->byteCount&15)||(dynamic?(!shader_tag(vs->firstTag)||!shader_tag(fs->firstTag)):vs->firstTag!=5||fs->firstTag!=5)||vs->tlsBytes||vs->wlsBytes||
-   fs->tlsBytes||fs->wlsBytes||!vs->workRegisters||vs->workRegisters>16||!fs->workRegisters||fs->workRegisters>16)return A5RuntimeUnsupported;
+ /* j5y17lte: dynamic fragments up to 44 KiB (large QuartzCore blurs) use
+  * HUGE_FS_CODE, which only the small layout leaves free (its varying
+  * planes end at VARY_DATA+3*0x1000); spilling dynamic stages get TLS. */
+ int small=r->vertexCount<=A5RuntimeMaxVertices;
+ unsigned fsLimit=dynamic?(small?0xb000u:(p->flags&A5MaliProfileShaderAnisotropy)?0x4000u:0x2000u):0x1000u;
+ unsigned tlsBytes=vs->tlsBytes>fs->tlsBytes?vs->tlsBytes:fs->tlsBytes;
+ if(!vs->bytes||!fs->bytes||!vs->byteCount||vs->byteCount>(dynamic?0x2000u:0x1000u)||!fs->byteCount||fs->byteCount>fsLimit||
+   (vs->byteCount&15)||(fs->byteCount&15)||(dynamic?(!shader_tag(vs->firstTag)||!shader_tag(fs->firstTag)):vs->firstTag!=5||fs->firstTag!=5)||
+   (tlsBytes&&(!dynamic||tlsBytes>A5RuntimeTLSMaxPerThread))||vs->wlsBytes||
+   fs->wlsBytes||!vs->workRegisters||vs->workRegisters>16||!fs->workRegisters||fs->workRegisters>16)return A5RuntimeUnsupported;
+ unsigned tlsShift=0;uint64_t tlsBase=0;
+ if(tlsBytes){
+  while((16u<<tlsShift)<tlsBytes)tlsShift++;
+  const A5RuntimeBuffer*s=&r->threadStorage;
+  if(!s->gpuVA||(s->gpuVA&4095)||s->offset||s->cpuBytes||s->bytes<A5RuntimeTLSBytes||
+     (16u<<tlsShift)*256u>A5RuntimeTLSBytes||!span(s->gpuVA,s->bytes)||
+     overlap(s->gpuVA,s->bytes,r->descriptorGPUVA,SIZE))return A5RuntimeUnsupported;
+  tlsBase=s->gpuVA;
+ }
  if(dynamic&&(((vs->bytes[0]&15)!=vs->firstTag)||((fs->bytes[0]&15)!=fs->firstTag)))return A5RuntimeUnsupported;
- unsigned fragmentCode=dynamic&&fs->byteCount>0x2000?BIG_FS_CODE:FS_CODE;
+ unsigned fragmentCode=dynamic&&fs->byteCount>0x4000?HUGE_FS_CODE:dynamic&&fs->byteCount>0x2000?BIG_FS_CODE:FS_CODE;
  memcpy(d+VS_CODE,vs->bytes,vs->byteCount);memcpy(d+fragmentCode,fs->bytes,fs->byteCount);
  unsigned fmt=out->metalPixelFormat==115?2:out->metalPixelFormat==10?1:out->metalPixelFormat==30?3:out->metalPixelFormat==43?4:0;
- framebuffer(d,r->descriptorGPUVA,fmt,out);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
+ framebuffer(d,r->descriptorGPUVA,fmt,out,tlsShift,tlsBase);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
   p->flags&A5MaliProfileInlineSourceOver?0:r->blend);
  if(r->blend==A5RuntimeBlendState){
   A5MaliBlendPlan plan=A5MaliLowerRenderState(&p->attachmentContracts[1].attachments[0]);
