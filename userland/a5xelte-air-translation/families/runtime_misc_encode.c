@@ -64,10 +64,10 @@ static void buf(uint8_t*d,unsigned at,uint64_t address,unsigned stride,unsigned 
   c.pointer=address;c.stride=stride;c.size=bytes;
  }
 }
-static void framebuffer(uint8_t*d,uint64_t VA,unsigned format,const A5RuntimeImage*out,unsigned tlsShift,uint64_t tlsBase){
+static void framebuffer(uint8_t*d,uint64_t VA,unsigned format,const A5RuntimeImage*out,unsigned tlsShift,uint64_t tlsBase,int preload){
  /* j5y17lte T830: v5 MFBD + render target (runtime_fb_v5.h); WLS zero, TLS
   * only for spilling dynamic stages (Panfrost stack shift, shared buffer). */
- A5FbV5 f={.tls_size=tlsShift,.tls_base=tlsBase,.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
+ A5FbV5 f={.tls_size=tlsShift,.tls_base=tlsBase,.preload=preload,.preload_base=preload?out->gpuVA:0,.width=out->width,.height=out->height,.bound_max_x=out->width-1,.bound_max_y=out->height-1,
   .internal_format=format==2?MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE:
      format==4?MALI_COLOR_BUFFER_INTERNAL_FORMAT_R5G5B5A1:MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8,
   .swizzle=format==0||format==4?0x60a:0x688,
@@ -871,7 +871,13 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
  unsigned fragmentCode=dynamic&&fs->byteCount>0x4000?HUGE_FS_CODE:dynamic&&fs->byteCount>0x2000?BIG_FS_CODE:FS_CODE;
  memcpy(d+VS_CODE,vs->bytes,vs->byteCount);memcpy(d+fragmentCode,fs->bytes,fs->byteCount);
  unsigned fmt=out->metalPixelFormat==115?2:out->metalPixelFormat==10?1:out->metalPixelFormat==30?3:out->metalPixelFormat==43?4:0;
- framebuffer(d,r->descriptorGPUVA,fmt,out,tlsShift,tlsBase);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
+ /* j5y17lte: the T830 MFBD render target preloads the existing image into
+  * the tile buffer itself. The A5 path drew it back as a full-screen
+  * textured TILER job before every draw (a second full-screen pass);
+  * A5J5_TEXTURED_PRELOAD=1 restores that path. */
+ static int nativePreload=-1;
+ if(nativePreload<0)nativePreload=!getenv("A5J5_TEXTURED_PRELOAD");
+ framebuffer(d,r->descriptorGPUVA,fmt,out,tlsShift,tlsBase,nativePreload);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
   p->flags&A5MaliProfileInlineSourceOver?0:r->blend);
  if(r->blend==A5RuntimeBlendState){
   A5MaliBlendPlan plan=A5MaliLowerRenderState(&p->attachmentContracts[1].attachments[0]);
@@ -943,6 +949,7 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
   }
   MALI_DRAW_pack((struct mali_draw_packed*)(d+0x140),&draw);
  }
+ if(nativePreload)return A5RuntimeOK;
  return a5_runtime_preload(d,r->descriptorGPUVA,&m->colorAttachments[pass->logicalTarget]);
 }
 int A5MaliEncodeRuntimeMiscPass(const A5RuntimeMiscDraw*m,void*out,size_t n){
