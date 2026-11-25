@@ -1,0 +1,103 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index c072bc9..f5b482e 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -268,6 +268,90 @@ j5_cpu_boost(void)
+ 	j5_clock_report();
+ }
+ 
++/*
++ * GPU DVFS (j5gpufreq=MHz, default 728; 0 keeps S-Boot's clock). Mali-T830
++ * G3D_PLL is pll141xx at CMU_G3D 0x11460000 (+0x000 lock, +0x100 CON0,
++ * +0x200 MUX_G3D_PLL bit 12 = PLL); the DFS table only moves the PLL (BUS /1,
++ * APB /4 at every level). PMS and voltages are this phone's ECT/ASV
++ * (TWRP: /sys/kernel/debug/ect, mali0/asv_table); the supply is BUCK2
++ * (Samsung gpu_exynos7870.c: regulator "BUCK2", vsel B2CTRL2 = 0x1d,
++ * V = 400 mV + 6.25 mV * code), +12.5 mV margin, only ever raised here.
++ * Done only while S-Boot's pd-g3d (PMU 0x10484000, status +4) is on. No
++ * thermal governor exists yet, hence the middle level by default.
++ */
++static void
++j5_gpu_boost(void)
++{
++	static const struct { unsigned mhz, p, m, s, uv; } levels[] = {
++		{1001, 4, 154, 0, 931250}, {845, 4, 130, 0, 837500},
++		{728, 4, 112, 0, 762500}, {676, 4, 104, 0, 743750},
++		{545, 13, 545, 1, 681250}, {450, 13, 450, 1, 637500},
++	};
++	unsigned want = 728;
++	(void)PE_parse_boot_argn("j5gpufreq", &want, sizeof(want));
++	vm_offset_t pmu = ml_io_map(0x10484000u, 0x1000);
++	vm_offset_t cmu = ml_io_map(0x11460000u, 0x1000);
++	if (!pmu || !cmu) {
++		return;
++	}
++	uint32_t pd = j5t_rd(pmu, 0x4);
++	uint32_t con0 = j5t_rd(cmu, 0x100), mux = j5t_rd(cmu, 0x200), clk = j5t_rd(cmu, 0x208);
++	unsigned P = (con0 >> 8) & 0x3fu, M = (con0 >> 16) & 0x3ffu, S = con0 & 7u;
++	unsigned from = (mux & (1u << 12)) && P ? 26u * M / (P << S) : 26u;
++	printf("J5 GPU DVFS: pd-g3d status=%#x pll=%#x mux=%#x clk_g3d=%#x -> %u MHz (S-Boot)\n",
++	    pd, con0, mux, clk, from);
++	if (!want || (pd & 0xfu) != 0xfu) {
++		return;
++	}
++	unsigned i = 0;
++	while (i < sizeof(levels) / sizeof(levels[0]) && levels[i].mhz != want) {
++		i++;
++	}
++	if (i == sizeof(levels) / sizeof(levels[0])) {
++		printf("J5 GPU DVFS: %u MHz is not a supported level\n", want);
++		return;
++	}
++	uint8_t vsel = 0;
++	if (!j5t_pmic_read(0x1d, &vsel)) {
++		printf("J5 GPU DVFS: BUCK2 read failed\n");
++		return;
++	}
++	unsigned code = (levels[i].uv - 400000u) / 6250u + 2u;
++	if (vsel < 0x20 || vsel > 0x70 || code > 0x70) {
++		printf("J5 GPU DVFS: unexpected BUCK2 vsel %#x, not changing\n", vsel);
++		return;
++	}
++	if (code > vsel) {
++		uint8_t check = 0;
++		if (!j5t_pmic_write(0x1d, (uint8_t)code) || !j5t_pmic_read(0x1d, &check) || check != code) {
++			printf("J5 GPU DVFS: BUCK2 write failed (readback %#x)\n", check);
++			return;
++		}
++		delay(1000);    /* ramp 12 mV/us */
++	}
++	j5t_wr(cmu, 0x200, mux & ~(1u << 12));              /* OSCCLK */
++	delay(10);
++	uint32_t next = con0 & ~((0x3ffu << 16) | (0x3fu << 8) | 7u | (1u << 26));
++	next |= (levels[i].m << 16) | (levels[i].p << 8) | levels[i].s | (1u << 5) | (1u << 31);
++	j5t_wr(cmu, 0x000, levels[i].p * 150u);             /* lock time */
++	j5t_wr(cmu, 0x100, next);
++	unsigned n = 0;
++	while (!(j5t_rd(cmu, 0x100) & (1u << 29)) && n < 100000) {
++		n++;
++		delay(1);
++	}
++	bool locked = (j5t_rd(cmu, 0x100) & (1u << 29)) != 0;
++	if (!locked) {
++		j5t_wr(cmu, 0x100, con0);                       /* back to S-Boot's */
++		delay(1000);
++	}
++	j5t_wr(cmu, 0x200, mux | (1u << 12));               /* PLL */
++	delay(10);
++	printf("J5 GPU DVFS: BUCK2 vsel %#x -> %#x, G3D pll %#x -> %#x locked=%d after %u us, %u MHz\n",
++	    vsel, code > vsel ? code : vsel, con0, j5t_rd(cmu, 0x100), locked, n,
++	    locked ? levels[i].mhz : from);
++}
++
+ /* ---- I2C2 (s3c2440 controller, polled) ---- */
+ 
+ #define IICCON  0x00u
+@@ -673,6 +757,7 @@ j5_touch_probe(void)
+ 	}
+ 
+ 	j5_cpu_boost();
++	j5_gpu_boost();
+ 
+ 	/* Touch bus: PERI I2C2 gate and GPC2-0/1 function 2, no pulls. */
+ 	printf("J5 TOUCH: PERI BUS0 gate %#x GPC2 con=%#x pud=%#x GPA0 dat=%#x\n",
