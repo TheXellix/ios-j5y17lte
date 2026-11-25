@@ -226,3 +226,13 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   crashes outside Metal). metal2vulkan builds and runs on the Linux host
   (src/m2v). Next: bigger code + TLS in the emitter, parallel compiler
   workers, precompile collected requests on the PC, batched GPU submission.
+- 2026-11-25 cycles 45-49: parallel compile workers (3); large blurs
+  (Midgard fragments to 44 KiB in HUGE_FS_CODE, TLS buffer for spills)
+  compile and link; all native jobs complete without faults. Timing:
+  command buffers 60-220 ms, almost all GPU time. S-Boot leaves the G3D at
+  343 MHz (MIF already 902 MHz, MEM_PLL 1804): GPU DVFS (patch 0030,
+  j5gpufreq, default 728 MHz, BUCK2 already 775 mV) halves job times
+  (full-screen draw 40 -> 19 ms, small 6 -> 3.4, clear 3.5 -> 1.9).
+  Native MFBD preload (instead of the textured preload TILER job per draw)
+  faulted with TILE_RANGE_FAULT on its first draw: opt-in only. Batching
+  is bounded by the AS1 design (4 surface + 4 buffer windows per batch).
