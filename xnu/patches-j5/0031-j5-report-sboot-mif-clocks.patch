@@ -1,0 +1,28 @@
+diff --git a/bsd/dev/j5_touch.c b/bsd/dev/j5_touch.c
+index f5b482e..474024a 100644
+--- a/bsd/dev/j5_touch.c
++++ b/bsd/dev/j5_touch.c
+@@ -300,6 +300,23 @@ j5_gpu_boost(void)
+ 	unsigned from = (mux & (1u << 12)) && P ? 26u * M / (P << S) : 26u;
+ 	printf("J5 GPU DVFS: pd-g3d status=%#x pll=%#x mux=%#x clk_g3d=%#x -> %u MHz (S-Boot)\n",
+ 	    pd, con0, mux, clk, from);
++	/* Read-only: S-Boot's memory/bus clocks (CMU_MIF 0x10460000), to see
++	 * whether the DRAM side is also left at a low operating point. */
++	vm_offset_t mif = ml_io_map(0x10460000u, 0x1000);
++	if (mif) {
++		static const struct { const char *name; unsigned con; } plls[] = {
++			{"MEM", 0x100}, {"MEDIA", 0x120}, {"BUS", 0x140},
++		};
++		for (unsigned k = 0; k < 3; k++) {
++			uint32_t v = j5t_rd(mif, plls[k].con);
++			unsigned p = (v >> 8) & 0x3fu, m = (v >> 16) & 0x3ffu, s = v & 7u;
++			printf("J5 MIF: %s_PLL con0=%#x en=%u -> %u MHz\n", plls[k].name, v,
++			    (v >> 31) & 1u, p ? 26u * m / (p << s) : 0u);
++		}
++		printf("J5 MIF: mux mem=%#x bus=%#x phy2x=%#x physwitch=%#x div_phy_clkm=%#x\n",
++		    j5t_rd(mif, 0x200), j5t_rd(mif, 0x208), j5t_rd(mif, 0x210),
++		    j5t_rd(mif, 0x214), j5t_rd(mif, 0x414));
++	}
+ 	if (!want || (pd & 0xfu) != 0xfu) {
+ 		return;
+ 	}
