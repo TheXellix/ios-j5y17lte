@@ -12,7 +12,8 @@
 #   - removes the absolute paths listed in STAGE/delete (one per line,
 #     no "..", confined to the mounted image)
 #   - copies STAGE/root/ into the image, owned by root:wheel, keeping the
-#     metadata of directories that already exist
+#     metadata of directories that already exist; STAGE/owners may hand
+#     staged files under /private/var/mobile/ back to mobile (501:501)
 #   - unmounts, checks again and restores the image size
 set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -65,6 +66,20 @@ if [ -f "$stage/delete" ]; then
 	done < "$stage/delete"
 fi
 tar -C "$stage/root" --owner=0 --group=0 -cf - . | tar -C "$mnt" --no-overwrite-dir -xpf -
+# Optional STAGE/owners: "mobile PATH" lines give staged files under
+# /private/var/mobile/ back to the iOS user mobile (501:501), e.g. its
+# preference plists. Nothing else can be re-owned.
+if [ -f "$stage/owners" ]; then
+	while read -r who p; do
+		[ "$who" = mobile ] || continue
+		case $p in /private/var/mobile/*) ;; *) continue ;; esac
+		case /$p/ in */../*|*/./*) continue ;; esac
+		[ -e "$stage/root$p" ] || continue
+		inside "$p" || exit 5
+		[ -L "$mnt$p" ] && exit 5
+		chown -h 501:501 -- "$mnt$p"
+	done < "$stage/owners"
+fi
 sync
 umount "$mnt"
 check

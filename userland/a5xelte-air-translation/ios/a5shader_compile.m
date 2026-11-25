@@ -560,7 +560,12 @@ int main(int argc, char **argv)
             run(NSBundle.mainBundle.executablePath,command,[NSString stringWithUTF8String:argv[3]]);return 0;
         }
 #endif
-        if (argc != 2 && argc != 3) { fprintf(stderr,"usage: %s --serve | --selftest | --pair read_surf|downsample_4\n",argv[0]); return 2; }
+        BOOL serveWorker = argc == 4 && !strcmp(argv[1],"--serve-worker");
+        if (serveWorker) {
+            a5WorkerIndex = (unsigned)strtoul(argv[2],NULL,10);
+            a5WorkerCount = (unsigned)strtoul(argv[3],NULL,10);
+            if (!a5WorkerIndex || a5WorkerIndex >= a5WorkerCount || a5WorkerCount > 8) return 2;
+        } else if (argc != 2 && argc != 3) { fprintf(stderr,"usage: %s --serve | --selftest | --pair read_surf|downsample_4\n",argv[0]); return 2; }
         NSString *self = NSBundle.mainBundle.executablePath;
         if (!NSFileManager.defaultManager) fail(@"file manager unavailable");
 #ifndef A5_SHADER_HOST_TEST
@@ -572,9 +577,19 @@ int main(int argc, char **argv)
         if (lstat(cacheRoot.fileSystemRepresentation,&st) || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 0077))
             fail(@"cache root is not a private root-owned directory");
         NSString *lock = [cacheRoot stringByAppendingPathComponent:@".lock"];
-        int lockfd = open(lock.fileSystemRepresentation,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);
-        if (lockfd < 0 || flock(lockfd,LOCK_EX|LOCK_NB)) fail(@"compiler cache is busy");
+        int lockfd = -1;
+        if (!serveWorker) {
+            /* Workers run under the --serve parent's exclusive lock. */
+            lockfd = open(lock.fileSystemRepresentation,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);
+            if (lockfd < 0 || flock(lockfd,LOCK_EX|LOCK_NB)) fail(@"compiler cache is busy");
+        }
         fprintf(stderr,"A5XELTE shader compiler: native iOS ARM64 service start no_time_limit=1\n");
+        if (argc == 2 && !strcmp(argv[1],"--serve")) {
+            /* Cortex-A53 x8 but only 736 MiB for iOS: three compiles at a time
+             * keep most cores and memory for the UI that is waiting on them. */
+            long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+            a5WorkerCount = cpus >= 8 ? 3 : cpus >= 4 ? 2 : 1;
+        }
         if (argc == 2 && !strcmp(argv[1],"--serve")) {
             serviceCheckpoint("main-roots-begin",nil,nil);
             a5PrepareRequestRoots();
@@ -584,7 +599,7 @@ int main(int argc, char **argv)
             if (setpriority(PRIO_PROCESS,0,0))
                 fprintf(stderr,"A5XELTE shader compiler: priority adjustment unavailable errno=%d\n",errno);
         }
-        if (argc == 2 && !strcmp(argv[1],"--serve")) {
+        if ((argc == 2 && !strcmp(argv[1],"--serve")) || serveWorker) {
             /* Requests are useful during first boot. The legacy pair selftest
              * can take minutes on Cortex-A53, so it remains an explicit
              * operation instead of delaying the long-lived request worker. */
@@ -598,7 +613,7 @@ int main(int argc, char **argv)
         } else if (argc == 3 && !strcmp(argv[1],"--pair")) {
             compilePair(self,[NSString stringWithUTF8String:argv[2]]);
         } else return 2;
-        close(lockfd);
+        if (lockfd >= 0) close(lockfd);
         fprintf(stderr,"A5XELTE shader compiler: DONE\n");
       } @catch (NSException *exception) {
         fail([@"invalid compiler metadata: " stringByAppendingString:exception.reason ?: exception.name]);

@@ -88,6 +88,26 @@ print('launchd cache: %d jobs, compiler job added' % len(jobs))
 PY
 chmod 0644 "$root$xpc/launchd.plist"
 
+# Accessibility > Reduce Transparency (default on, J5_REDUCE_TRANSPARENCY=0
+# leaves it): CoreAnimation draws solid materials instead of the large blur
+# passes, which the T830 path cannot run yet and which cost the most GPU.
+if [ "${J5_REDUCE_TRANSPARENCY:-1}" = 1 ]; then
+	echo "== reduce transparency"
+	ax=/private/var/mobile/Library/Preferences/com.apple.Accessibility.plist
+	python3 "$hfs" "$img" get "$ax" "$tmp/ax.plist" 2>/dev/null || rm -f "$tmp/ax.plist"
+	install -d -m 0755 "$root$(dirname "$ax")"
+	python3 - "$tmp/ax.plist" "$root$ax" <<'PY2'
+import os, plistlib, sys
+src, dst = sys.argv[1:]
+prefs = plistlib.loads(open(src, 'rb').read()) if os.path.exists(src) else {}
+prefs['EnhancedBackgroundContrastEnabled'] = True
+open(dst, 'wb').write(plistlib.dumps(prefs, fmt=plistlib.FMT_BINARY))
+print('accessibility: %d keys, EnhancedBackgroundContrastEnabled=1' % len(prefs))
+PY2
+	chmod 0600 "$root$ax"
+	echo "mobile $ax" >> "$stage/owners"
+fi
+
 # Replace whole trees; compiler publications (also failures) belong to the
 # previous compiler, so pending requests are compiled again.
 cat > "$stage/delete" <<'EOF'

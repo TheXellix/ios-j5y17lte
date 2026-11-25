@@ -1249,7 +1249,7 @@ static unsigned a5DispatchArrivingFunctions(NSString *self,NSArray *profiles,int
         while(*remaining&&count<64&&(entry=readdir(files))){
             NSString *name=[NSString stringWithUTF8String:entry->d_name];
             if(![name hasSuffix:@".request.json"]||name.length!=77)continue;
-            NSString *key=[name substringToIndex:64];if(!a5HexDigest(key))continue;
+            NSString *key=[name substringToIndex:64];if(!a5HexDigest(key))continue;if(!a5WorkerOwns(key))continue;
             count++;
             if([seen containsObject:key])continue;
             [seen addObject:key];(*remaining)--;
@@ -1280,12 +1280,24 @@ static void (*a5ScanAfterSnapshot)(void);
 static void (*a5ScanBeforeOldHandler)(NSDictionary *);
 #endif
 
+/* j5y17lte: parallel compile workers. The --serve process (worker 0)
+ * spawns --serve-worker I N copies; every request belongs to exactly one
+ * worker by its digest, so no two processes touch the same key. Shared
+ * cleanup/maintenance stays with worker 0. */
+static unsigned a5WorkerIndex=0,a5WorkerCount=1;
+static BOOL a5WorkerOwns(NSString *key)
+{
+    if(a5WorkerCount<=1)return YES;
+    unsigned byte=0;
+    if(key.length<2||sscanf(key.UTF8String,"%2x",&byte)!=1)return NO;
+    return byte%a5WorkerCount==a5WorkerIndex;
+}
 static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfiles)
 {
     static unsigned scans;
     static NSString *maintenanceCursor;
     unsigned scan=++scans;
-    if((scan&127)==0)a5BoundedArchiveCleanup();
+    if((scan&127)==0&&!a5WorkerIndex)a5BoundedArchiveCleanup();
     BOOL report=scan<=8;
     __block unsigned usersSeen=0,usersRejected=0,candidates=0,readRejected=0,
         jsonRejected=0,identityRejected=0,digestRejected=0,handled=0,capped=0;
@@ -1320,7 +1332,7 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
         while(count<64&&(entry=readdir(files))){
             NSString *name=[NSString stringWithUTF8String:entry->d_name];
             if(![name hasSuffix:@".request.json"]||name.length!=77)continue;
-            NSString *key=[name substringToIndex:64];if(!a5HexDigest(key))continue;
+            NSString *key=[name substringToIndex:64];if(!a5HexDigest(key))continue;if(!a5WorkerOwns(key))continue;
             count++;candidates++;if([seen containsObject:key])continue;[seen addObject:key];
             NSString *laneKey=[component stringByAppendingFormat:@"/%d",lane];
             NSDictionary *meta=@{@"user":component,@"uid":@(uid),@"lane":@(lane),@"laneKey":laneKey,@"name":name,@"key":key,
@@ -1377,7 +1389,7 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
      * rescans. Arrivals get real authentication/compilation before maintenance. */
     arrivals+=a5DispatchArrivingFunctions(self,knownProfiles,rootfd,seen,&arrivalBudget);
     unsigned maintenance=0;
-    if(!arrivals&&arrivalBudget&&oldNames.count){
+    if(!arrivals&&arrivalBudget&&oldNames.count&&!a5WorkerIndex){
         NSArray *ordered=[oldNames sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
             return [a[@"token"]compare:b[@"token"]];}];
         NSDictionary *selected=ordered.firstObject;
@@ -1430,7 +1442,7 @@ static void a5Serve(NSString *self)
 #ifdef A5_EMBEDDED_PUBLICATION
     a5InstallEmbeddedPublication();
 #endif
-    a5BoundedArchiveCleanup();
+    if(!a5WorkerIndex)a5BoundedArchiveCleanup();
     serviceCheckpoint("serve-roots-end",nil,nil);
     NSMutableArray<NSDictionary *> *knownProfiles = [NSMutableArray array];
     serviceCheckpoint("stock-read-begin",nil,nil);
@@ -1458,8 +1470,28 @@ static void a5Serve(NSString *self)
         [knownProfiles addObject:known];
         serviceCheckpoint("recipe-read-end",nil,profile.stringValue);
     }
+    pid_t workers[8]={0};
+    if(!a5WorkerIndex&&a5WorkerCount>1)
+        fprintf(stderr,"A5XELTE shader compiler: %u parallel workers\n",a5WorkerCount);
     for (;;) {
+        if(!a5WorkerIndex){
+            for(unsigned i=1;i<a5WorkerCount&&i<8;i++){
+                if(workers[i]>0){
+                    int status=0;pid_t done=waitpid(workers[i],&status,WNOHANG);
+                    if(done==0)continue;
+                    fprintf(stderr,"A5XELTE shader compiler: worker %u exited status=%d, restarting\n",i,status);
+                    workers[i]=0;
+                }
+                char index[8],count[8];
+                snprintf(index,sizeof(index),"%u",i);snprintf(count,sizeof(count),"%u",a5WorkerCount);
+                char *argv[]={(char *)self.fileSystemRepresentation,"--serve-worker",index,count,NULL};
+                pid_t pid=0;
+                if(!posix_spawn(&pid,argv[0],NULL,NULL,argv,environ))workers[i]=pid;
+            }
+        }else if(getppid()==1){
+            exit(0); /* the --serve parent is gone; launchd restarts the service */
+        }
         @autoreleasepool { a5ScanRequests(self,knownProfiles); }
-        sleep(5);
+        sleep(a5WorkerCount>1?2:5);
     }
 }
