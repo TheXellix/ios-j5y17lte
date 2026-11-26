@@ -248,15 +248,18 @@ static int dynamic_images(uint8_t*d,const A5RuntimeMiscDraw*m){
       1,0,state->lodMinClamp,state->lodMaxClamp};
   }else sm=m->fragmentSamplers+sampler->metalIndex;
   if((!(sampler->flags&A5MaliResourceImmutableSampler)&&!textured_sampler(sm))||!valid_image(im)||
-     (im->metalPixelFormat!=70&&im->metalPixelFormat!=80&&im->metalPixelFormat!=115&&im->metalPixelFormat!=30&&im->metalPixelFormat!=10&&im->metalPixelFormat!=1)||
+     (im->metalPixelFormat!=70&&im->metalPixelFormat!=80&&im->metalPixelFormat!=115&&im->metalPixelFormat!=30&&im->metalPixelFormat!=10&&im->metalPixelFormat!=1&&im->metalPixelFormat!=43)||
      overlap(im->gpuVA,im->bytes,va,SIZE))return A5RuntimeUnsupported;
   for(unsigned j=0;j<p->passCount;j++){
    const A5RuntimeImage*out=m->colorAttachments+p->passes[j].logicalTarget;
    if(overlap(im->gpuVA,im->bytes,out->gpuVA,out->bytes))return A5RuntimeUnsupported;
   }
+  /* j5y17lte: BGR5A1 (43) is QuartzCore's half-resolution backdrop for
+   * blurs; same Mali format/swizzle as the preload path uses for it. */
   unsigned format=(im->metalPixelFormat==70||im->metalPixelFormat==80)?MALI_RGBA8_UNORM:
+   im->metalPixelFormat==43?MALI_RGB5_A1_UNORM:
    im->metalPixelFormat==115?MALI_RGBA16F:im->metalPixelFormat==30?MALI_RG8_UNORM:MALI_R8_UNORM;
-  unsigned swizzle=im->metalPixelFormat==80?0x60a:(im->metalPixelFormat==70||im->metalPixelFormat==115)?0x688:
+  unsigned swizzle=(im->metalPixelFormat==80||im->metalPixelFormat==43)?0x60a:(im->metalPixelFormat==70||im->metalPixelFormat==115)?0x688:
    im->metalPixelFormat==30?RG_SWIZZLE:im->metalPixelFormat==1?A_SWIZZLE:R_SWIZZLE;
   unsigned levels=m->fragmentMips[r->metalIndex].levelCount?m->fragmentMips[r->metalIndex].levelCount:1;
   unsigned tex=levels>1?MIP_TEX+r->nativeIndex*MIP_TEX_STRIDE:DYNAMIC_TEX+r->nativeIndex*64;

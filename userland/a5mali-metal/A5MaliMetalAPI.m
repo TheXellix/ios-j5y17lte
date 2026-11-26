@@ -1815,7 +1815,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
         if(profile->profileID==A5MaliDynamicProfileID)sourceFormat=
             image.pixelFormat==MTLPixelFormatBGRA8Unorm||image.pixelFormat==MTLPixelFormatRGBA8Unorm||image.pixelFormat==MTLPixelFormatA8Unorm||
             image.pixelFormat==MTLPixelFormatR8Unorm||image.pixelFormat==MTLPixelFormatRG8Unorm||
-            image.pixelFormat==MTLPixelFormatRGBA16Float;
+            image.pixelFormat==MTLPixelFormatRGBA16Float||image.pixelFormat==MTLPixelFormatBGR5A1Unorm;
         if(!image)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-missing",r,nil,nil,nil,0);
         if(!(image.usage&MTLTextureUsageShaderRead))return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-usage",r,image,nil,nil,0);
         if(!sourceFormat)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-format",r,image,nil,nil,0);
@@ -2229,7 +2229,10 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 _buffer.diagnosticID,((A5MaliCompiledPipeline *)_pipeline).profile->profileID,
                 _ended?"ended":vertexStart?"vertex-start":"pipeline-or-resource-contract",
                 (unsigned long)primitiveType,(unsigned long)vertexStart,(unsigned long)vertexCount);
-            [_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];
+            /* j5y17lte: one unsupported draw used to fail the whole command
+             * buffer, so QuartzCore lost entire frames (cycle 53: 24-45 draw
+             * frames dropped for one BGR5A1 source). Skip only this draw. */
+            if(_ended)[_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];
         }
         else { _hasDraw=YES; [self recordDrawResources];[_buffer noteQueuedDraw]; }
         return;
@@ -2282,7 +2285,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
         indexBinding:binding indexCount:count indexSize:width]){
         [self logIndexedRejection:binding?"pipeline-or-resource-contract":"index-binding" primitive:type
             count:count indexType:indexType buffer:indexBuffer offset:offset];
-        [_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];
+        /* j5y17lte: skip this draw only; keep the rest of the frame. */
+        if(!binding)[_buffer markEncodingError:kIOReturnUnsupported selector:_cmd];
     }else { _hasDraw=YES;[self recordDrawResources];
         [_buffer recordResource:indexBuffer access:A5MaliResourceAccessRead];[_buffer noteQueuedDraw]; }
 }
