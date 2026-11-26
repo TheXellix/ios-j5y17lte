@@ -236,3 +236,12 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   Native MFBD preload (instead of the textured preload TILER job per draw)
   faulted with TILE_RANGE_FAULT on its first draw: opt-in only. Batching
   is bounded by the AS1 design (4 surface + 4 buffer windows per batch).
+- 2026-11-26 shader precompilation on the PC: each install+flash had
+  replaced the phone's root (and its compiled stages) with the PC image.
+  tools/j5-cycle.sh now harvests every shader request into
+  work/precomp/store; j5-precompile.py (line-for-line port of the dynamic
+  stage path) with metal2vulkan and a host-built midgard-generic602
+  produces publications byte-identical to the phone's (18/18 stages and
+  the path_blit failure receipt), all 35 in ~1.5 s; j5-install-metal.sh
+  puts them in the image. Cycle 52: 0 stages compiled on the phone; the
+  only wait left (65 s, path_blit failure) is now precompiled too.
