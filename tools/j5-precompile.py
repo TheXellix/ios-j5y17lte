@@ -35,17 +35,19 @@ class Skip(Exception):
 
 def canonical(value):
     """NSJSONSerialization(NSJSONWritingSortedKeys) bytes."""
+    # NSJSONSerialization writes integral doubles without a fraction ("0")
+    # and others in their shortest form ("0.25", as Python repr).
     def walk(v):
         if isinstance(v, float):
-            raise Skip('float in canonical JSON')
+            if v != v or v in (float('inf'), float('-inf')):
+                raise Skip('non-finite float')
+            return int(v) if v.is_integer() else v
         if isinstance(v, dict):
-            for x in v.values():
-                walk(x)
-        elif isinstance(v, list):
-            for x in v:
-                walk(x)
-    walk(value)
-    text = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    text = json.dumps(walk(value), sort_keys=True, separators=(',', ':'), ensure_ascii=False)
     return text.replace('/', '\\/').encode()
 
 
@@ -141,6 +143,30 @@ def buffer_size(reflection, title, slot):
     raise Skip('buffer has no reflected slot')
 
 
+def immutable_sampler_ok(state, native):
+    """A5MaliDecodeImmutableSampler (userland/a5mali-metal/A5MaliImmutableSampler.h)."""
+    keys = ['mag_filter', 'min_filter', 'mipmap_mode', 'address_mode_u', 'address_mode_v',
+            'address_mode_w', 'mip_lod_bias', 'max_anisotropy', 'compare', 'min_lod', 'max_lod',
+            'border_color', 'reduction', 'border_components']
+    if not isinstance(state, dict) or len(state) != len(keys) or native >= 4 or set(state) != set(keys):
+        return False
+    if any(state[k] is not None for k in ('max_anisotropy', 'compare', 'border_components')):
+        return False
+    for k in keys:
+        if k in ('max_anisotropy', 'compare', 'border_components'):
+            continue
+        v = state[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float('inf'), float('-inf')):
+            return False
+    if any(state[k] not in (0, 1) for k in ('mag_filter', 'min_filter')):
+        return False
+    if any(state[k] != 0 for k in ('mipmap_mode', 'mip_lod_bias', 'border_color', 'reduction')):
+        return False
+    if any(state[k] not in (0, 2, 3) for k in ('address_mode_u', 'address_mode_v', 'address_mode_w')):
+        return False
+    return 0 <= state['min_lod'] <= state['max_lod'] <= 15
+
+
 def dynamic_abi(reflection, stage):
     title = 'Vertex' if stage == 'vertex' else 'Fragment'
     short = 'vert' if stage == 'vertex' else 'frag'
@@ -188,8 +214,9 @@ def dynamic_abi(reflection, stage):
                 texture, sampler = src['texture'], src['sampler']
                 selection = sampler.get('sampler')
                 if isinstance(selection, dict) and 'Constexpr' in selection:
-                    raise Skip('immutable sampler (not ported)')
-                if not isinstance(selection, dict) or set(selection) != {'Slot'} or b.get('immutable_sampler') is not None:
+                    if not immutable_sampler_ok(b.get('immutable_sampler'), textures):
+                        raise Skip('unsupported immutable sampler')
+                elif not isinstance(selection, dict) or set(selection) != {'Slot'} or b.get('immutable_sampler') is not None:
                     raise Skip('sampler source')
                 info = None
                 for slot in iface['slots']:
