@@ -11,11 +11,18 @@ static inline BOOL A5MaliValidBlendRequest(id state) {
  if(![state isKindOfClass:NSDictionary.class]||
   ![[NSSet setWithArray:[state allKeys]] isEqual:[NSSet setWithArray:keys]])return NO;
  for(NSString *key in keys){id n=state[key];
-  unsigned limit=[key isEqual:@"format"]?80:[key isEqual:@"write_mask"]?15:
+  unsigned limit=[key isEqual:@"format"]?115:[key isEqual:@"write_mask"]?15:
    [key hasSuffix:@"operation"]?4:14;
   if(![n isKindOfClass:NSNumber.class]||CFGetTypeID((__bridge CFTypeRef)n)==CFBooleanGetTypeID()||
    [n doubleValue]<0||[n doubleValue]>limit||[n doubleValue]!=(double)[n unsignedIntValue])return NO;
  }
+ /* j5y17lte: RGBA16Float (115) targets get a fragment variant packed for
+  * the RAW64 tile buffer; only the opaque replace state (no blending). */
+ if([state[@"format"] isEqual:@115])
+  return [state[@"write_mask"] isEqual:@15]&&[state[@"rgb_operation"] isEqual:@0]&&
+   [state[@"alpha_operation"] isEqual:@0]&&[state[@"source_rgb"] isEqual:@1]&&
+   [state[@"destination_rgb"] isEqual:@0]&&[state[@"source_alpha"] isEqual:@1]&&
+   [state[@"destination_alpha"] isEqual:@0];
  return [state[@"format"] isEqual:@80]||[state[@"format"] isEqual:@43];
 }
 #endif

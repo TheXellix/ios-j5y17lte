@@ -82,7 +82,7 @@ static int a5_dynamic_read(const char *path,mesa_shader_stage stage,
          if(stage!=MESA_SHADER_FRAGMENT || out->blend.enabled ||
             sscanf(line,"blend %u %u %u %u %u %u %u %u %c",
              &format,&mask,&rgb,&alpha,&sr,&dr,&sa,&da,&tail)!=8 ||
-            (format!=80&&format!=43)||mask>15||rgb>4||alpha>4||sr>14||dr>14||sa>14||da>14)goto bad;
+            (format!=80&&format!=43&&format!=115)||mask>15||rgb>4||alpha>4||sr>14||dr>14||sa>14||da>14)goto bad;
          out->blend.enabled=1;out->blend.format=format;out->blend.mask=mask;
          out->blend.rgb=rgb;out->blend.alpha=alpha;
          out->blend.src_rgb=sr;out->blend.dst_rgb=dr;out->blend.src_alpha=sa;out->blend.dst_alpha=da;

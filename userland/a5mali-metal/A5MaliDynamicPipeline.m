@@ -434,6 +434,12 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
             return rejectPipeline(vf,ff,@"pipeline.source-snapshot",snapshotError,error);
         fs=blendVariant(ff,d.colorAttachments[0],error);
         if(!fs)return nil;
+    }else if(fs&&d.colorAttachments[0].pixelFormat==MTLPixelFormatRGBA16Float){
+        /* j5y17lte: an RGBA16Float target needs the fragment packed for the
+         * RAW64 tile buffer: a target-specific variant of the same function
+         * (opaque replace state only, see A5MaliValidBlendRequest). */
+        fs=blendVariant(ff,d.colorAttachments[0],error);
+        if(!fs)return nil;
     }
     if(!vs&&!fs){
         if(d.colorAttachments[0].pixelFormat!=MTLPixelFormatBGR5A1Unorm)return nil;
@@ -484,8 +490,9 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
      * distinct BGRA8 versus packed BGR5A1 storage conversion; never alias the
      * descriptor format or infer an sRGB identity from a numeric format. */
     MTLPixelFormat target=d.colorAttachments[0].pixelFormat;
-    if(target!=MTLPixelFormatBGRA8Unorm&&target!=MTLPixelFormatBGR5A1Unorm)
-        return rejectPipeline(vf,ff,@"descriptor.color0-format",unsupported(@"dynamic target requires BGRA8Unorm or BGR5A1Unorm"),error);
+    if(target!=MTLPixelFormatBGRA8Unorm&&target!=MTLPixelFormatBGR5A1Unorm&&
+       !(target==MTLPixelFormatRGBA16Float&&fs.functionPayload[@"blend_state"]))
+        return rejectPipeline(vf,ff,@"descriptor.color0-format",unsupported(@"dynamic target requires BGRA8Unorm, BGR5A1Unorm or a packed RGBA16Float variant"),error);
     A5MaliDynamicPipelineEntry *e=[A5MaliDynamicPipelineEntry new];
     e->_owners=@[vs?:v,fs?:f];e->_vertexName=[vf.name copy];e->_fragmentName=[ff.name copy];
     e->_pass=(A5MaliCompiledPass){.passID=A5MaliDynamicProfileID,

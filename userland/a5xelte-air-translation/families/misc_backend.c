@@ -404,7 +404,9 @@ static int compile(const char *input,const char *output,mesa_shader_stage stage,
    NIR_PASS(_,nir,nir_opt_dce);
    if(resources.invalid||ctx.invalid){fprintf(stderr,"unsupported resource ABI\n");return 2;}
    nir_validate_shader(nir,"family real resource lowering");
-   if(dynamic && dynamic->blend.enabled){
+   /* j5y17lte: format 115 is an opaque RGBA16Float target: no blend
+    * equation, only the RAW64 store packing below. */
+   if(dynamic && dynamic->blend.enabled && dynamic->blend.format!=115){
       static const enum pipe_blend_func operations[]={PIPE_BLEND_ADD,PIPE_BLEND_SUBTRACT,
          PIPE_BLEND_REVERSE_SUBTRACT,PIPE_BLEND_MIN,PIPE_BLEND_MAX};
       static const enum pipe_blendfactor factors[]={PIPE_BLENDFACTOR_ZERO,PIPE_BLENDFACTOR_ONE,
@@ -439,7 +441,8 @@ static int compile(const char *input,const char *output,mesa_shader_stage stage,
       nir->info.fs.uses_sample_shading=false;
       nir_validate_shader(nir,"actual QC RAW204 inline source-over");
    }
-   if(stage==MESA_SHADER_FRAGMENT && A5_NATIVE_RGBA16)
+   if(stage==MESA_SHADER_FRAGMENT && (A5_NATIVE_RGBA16 ||
+      (dynamic && dynamic->blend.enabled && dynamic->blend.format==115)))
       a5_lower_native_rgba16(nir);
    pan_postprocess_nir(nir,&inputs,&info);
    NIR_PASS(_,nir,nir_shader_intrinsics_pass,lower_sysvals,nir_metadata_control_flow,&ctx);

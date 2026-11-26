@@ -433,7 +433,7 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
     !(p->flags&A5MaliProfileSourceOverBlend)||p->passCount!=1||!p->passes||
     p->passes[0].passID!=p->profileID||p->passes[0].logicalTarget||
     !p->vertexName||!p->vertexName[0]||!p->fragmentName||!p->fragmentName[0]||
-    (p->colorFormats[0]!=80&&p->colorFormats[0]!=43)||p->viewportWidth||p->viewportHeight||
+    (p->colorFormats[0]!=80&&p->colorFormats[0]!=43&&p->colorFormats[0]!=115)||p->viewportWidth||p->viewportHeight||
     p->attributeCount<2||p->attributeCount>4||!p->attributes||p->layoutCount!=1||!p->layouts||
     !p->resourceCount||p->resourceCount>16||!p->resources||
     !p->pushFieldCount||p->pushFieldCount>16||!p->pushFields||
