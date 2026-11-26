@@ -53,4 +53,27 @@ for proc in backboardd SpringBoard; do
 	newest=$(awk -v p="$proc-" 'index($4, p) == 1 { print $3, $4 }' "$out/crashes.txt" | sort | tail -1 | cut -d' ' -f2)
 	[ -n "$newest" ] && python3 "$hfs" phone get "$crashes/$newest" "$out/$newest" || true
 done
+# Shader requests iOS made (spool + the compiler's completed-request ring)
+# go to a permanent store, so j5-install-metal.sh can precompile them all;
+# the phone's own publications are kept beside the logs for comparison.
+store="${J5_SHADER_STORE:-$here/../../../work/precomp/store}"
+mkdir -p "$store" "$out/requests"
+python3 "$hfs" phone pull /private/var/tmp/a5mali-shader-requests "$out/requests/spool" 2>/dev/null || true
+python3 "$hfs" phone pull /private/var/db/a5shader-cache/completed-requests "$out/requests/archive" 2>/dev/null || true
+python3 "$hfs" phone pull /private/var/tmp/a5mali-shader-compiled "$out/published" 2>/dev/null || true
+python3 - "$out/requests" "$store" <<'PY2'
+import json, pathlib, sys
+src, store = map(pathlib.Path, sys.argv[1:])
+new = 0
+for f in list(src.rglob('*.request.json')) + list(src.rglob('slot-*.json')):
+    try:
+        r = json.loads(f.read_bytes())
+        key = r['request_id']
+    except Exception:
+        continue
+    dst = store / (key + '.request.json')
+    if not dst.exists():
+        dst.write_bytes(f.read_bytes()); new += 1
+print('shader request store: %d new, %d total' % (new, len(list(store.glob('*.request.json')))))
+PY2
 grep -a "J5 autotwrp\|CRASH .* reason\|Metal pipeline\|dynamic link\|G3D.*fault" "$out/k.txt" | sort | uniq -c | sort -rn | head -20 || true

@@ -65,6 +65,30 @@ python3 "$here/tools/j5-make-scaffold603.py" "$tmp/default.metallib" "$root/usr/
 python3 "$here/tools/j5-make-companions.py" "$tmp/default.metallib" "$root/usr/libexec/a5shader/companions.json"
 chmod 0644 "$root/usr/libexec/a5shader/"*.json
 
+# Precompiled shaders: every request ever harvested from the phone
+# (tools/j5-cycle.sh -> work/precomp/store) is compiled here by the same
+# metal2vulkan and Midgard backend sources (byte-identical publications),
+# so a fresh image does not recompile them on the A53.
+echo "== precompiled shaders"
+store=${J5_SHADER_STORE:-$here/../../work/precomp/store}
+m2v=${J5_M2V:-$here/../m2v/target/release/metal2vulkan}
+hostmidgard=${J5_HOST_MIDGARD_DIR:-$here/../../work/hostmidgard}
+mesa=${J5_MESA_SOURCE:-$here/../mesa-26.2.4}
+if [ -d "$store" ] && [ -x "$m2v" ]; then
+	want=$("$here/tools/j5-build-host-midgard.sh" --fingerprint)
+	if [ ! -x "$hostmidgard/midgard-generic602" ] || [ "$(cat "$hostmidgard/source.sha256" 2>/dev/null)" != "$want" ]; then
+		echo "rebuilding the host Midgard backend (sources changed)"
+		"$here/tools/j5-build-host-midgard.sh" "$mesa" "$hostmidgard" | tail -1
+	fi
+	install -d -m 0755 "$root/private/var/tmp/a5mali-shader-compiled"
+	python3 "$here/tools/j5-precompile.py" --metallib "$tmp/default.metallib" \
+		--a5shader "$root/usr/libexec/a5shader" --m2v "$m2v" \
+		--backend "$hostmidgard/midgard-generic602" "$store" \
+		"$root/private/var/tmp/a5mali-shader-compiled" | tail -1
+else
+	echo "no request store or metal2vulkan; the phone compiles on demand"
+fi
+
 echo "== launchd cache"
 xpc=/System/Library/xpc
 if ! python3 "$hfs" "$img" get "$xpc/launchd.plist.j5-orig" "$tmp/orig.plist" 2>/dev/null; then
