@@ -547,6 +547,10 @@ typedef NS_ENUM(uint32_t, A5MaliKind) {
         }
         if(operation.kind!=A5MaliKindNative)terminal=kr==KERN_SUCCESS;
         if (kr != KERN_SUCCESS) {
+            /* j5y17lte: always name the operation that fails a command buffer. */
+            fprintf(stderr,"A5J5 operation failed: index=%lu of %lu kind=%d result=%x\n",
+                (unsigned long)[_operations indexOfObject:operation],(unsigned long)_operations.count,
+                (int)operation.kind,(unsigned)kr);
             if (error) *error = a5error(kr);
             return NO;
         }

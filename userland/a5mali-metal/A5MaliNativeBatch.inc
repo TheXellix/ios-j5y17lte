@@ -68,11 +68,18 @@ static kern_return_t a5NativeBatchFlush(void){
  /* All staged writes target fresh, disjoint arena slices. They are CPU-only
   * mutations until this point; no pending GPU job was started on failure. */
  uint64_t uploadBegin=A5MaliWallUS();
- kern_return_t upload=a5NativeArenaUpload(s);s->uploadUS+=A5MaliElapsedUS(uploadBegin,A5MaliWallUS());if(upload)return s->error=upload;
+ kern_return_t upload=a5NativeArenaUpload(s);s->uploadUS+=A5MaliElapsedUS(uploadBegin,A5MaliWallUS());
+ if(upload){fprintf(stderr,"A5J5 batch upload failed: kr=%x count=%u\n",(unsigned)upload,count);return s->error=upload;}
  A5NativeBatchResult r={0};size_t size=sizeof(r);submissionMayBeActive=1;
  uint64_t submitBegin=A5MaliWallUS();
  kern_return_t kr=s->call(s->context,A5NativeBatchSelector,s->packet,bytes,&r,&size);
  s->submitUS+=A5MaliElapsedUS(submitBegin,A5MaliWallUS());
+ if(kr||r.status){
+  fprintf(stderr,"A5J5 batch failed: kr=%x status=%u count=%u completed=%u",(unsigned)kr,r.status,count,r.completedCount);
+  for(unsigned i=0;i<count;i++){A5NativeSubmitRequest q;memcpy(&q,s->packet+sizeof(h)+i*(sizeof(q)+A5NativeJobBytes),sizeof(q));
+   fprintf(stderr," [%u profile=%u reads=%x writes=%x buffers=%x epoch=%u]",i,q.profileID,q.readSurfaces,q.writeSurfaces,q.readBuffers,q.mappingEpoch);}
+  fprintf(stderr,"\n");
+ }
  if(kr){if(kr==kIOReturnNotReady||kr==kIOReturnNotFound||kr==kIOReturnNoResources||kr==kIOReturnBadArgument)submissionMayBeActive=0;return s->error=kr;}
  if(size!=sizeof(r)||r.header.version!=1||r.header.size!=sizeof(r)||r.header.reserved0||r.header.reserved1||r.count!=count||r.reserved||r.completedCount>count||r.status>5||(!r.status&&r.completedCount!=count)||(r.status&&r.completedCount==count))return s->error=kIOReturnIOError;
  uint64_t previous=s->last.fragmentFence;
