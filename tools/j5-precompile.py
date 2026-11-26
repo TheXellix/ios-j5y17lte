@@ -33,6 +33,13 @@ class Skip(Exception):
     pass
 
 
+class Fail(Skip):
+    """A deterministic compiler failure: the phone publishes a failure receipt
+    with exactly this message (a5DynamicFailure); so does the precompiler, so
+    CoreAnimation gets its placeholder at once instead of waiting for the
+    service to start and fail the same request."""
+
+
 def canonical(value):
     """NSJSONSerialization(NSJSONWritingSortedKeys) bytes."""
     # NSJSONSerialization writes integral doubles without a fraction ("0")
@@ -241,7 +248,7 @@ def dynamic_abi(reflection, stage):
                     raise Skip('framebuffer fetch')
                 m += 'framebuffer_fetch %d 0\n' % index
             else:
-                raise Skip('descriptor kind needs a new lowering')
+                raise Fail('dynamic descriptor kind requires a new lowering')
     selected = [e for e in reflection.get('stages', []) if e.get('stage') == short]
     if (len(selected) != 1 or selected[0].get('entry_point') != 'main' or
             selected[0].get('stage_flags') or selected[0].get('required_subgroup_size') is not None):
@@ -265,6 +272,37 @@ def dynamic_abi(reflection, stage):
             raise Skip('spec key needs a new lowering')
         m += 'spec %d %d\n' % (c['id'], value)
     return m
+
+
+def identity(request, success):
+    receipt = {
+        'schema': 2, 'kind': 'dynamic-stage', 'request_id': request['request_id'],
+        'source_library': 'quartzcore', 'metallib_sha256': request['metallib_sha256'],
+        'gpu_id': '08300010', 'compiler_abi': request['compiler_abi'], 'stage': request['stage'],
+        'function': request['function'], 'stage_compiled': success, 'pipeline_compatible': False,
+        'named_constants_sha256': digest(canonical(request['named_constants'])),
+        'indexed_constants_sha256': digest(canonical(request['indexed_constants'])),
+        'support_generation': 3 if variable_blur(request) else 2}
+    if 'blend_state' in request:
+        receipt['blend_state'] = request['blend_state']
+    return receipt
+
+
+def publish(out, key, files):
+    work = out / ('.precompile-' + key)
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    for name, data in files.items():
+        (work / name).write_bytes(data)
+        (work / name).chmod(0o444)
+    work.chmod(0o755)
+    work.rename(out / key)
+
+
+def publish_failure(request, reason, out):
+    receipt = identity(request, False)
+    receipt['error'] = reason
+    publish(out, request['request_id'], {'receipt.json': canonical(receipt)})
 
 
 def compile_request(request, a, scaffold603, companions, profile_json, out):
@@ -391,7 +429,7 @@ def main():
     files = []
     for p in a.requests:
         files += sorted(p.rglob('*.request.json')) if p.is_dir() else [p]
-    done = skipped = present = 0
+    done = skipped = present = failed = 0
     for f in files:
         request = json.loads(f.read_text())
         if request.get('kind') != 'function' or request.get('stage') not in ('vertex', 'fragment'):
@@ -404,11 +442,17 @@ def main():
             done += 1
             print('compiled %s %s %s %d bytes' % (request['request_id'][:12], request['stage'],
                                                   request['function'], n))
+        except Fail as e:
+            publish_failure(request, str(e), out)
+            failed += 1
+            print('failed   %s %s %s: %s' % (request['request_id'][:12], request['stage'],
+                                             request['function'], e))
         except Skip as e:
             skipped += 1
             print('skipped  %s %s %s: %s' % (request['request_id'][:12], request['stage'],
                                              request['function'], e))
-    print('precompile: %d compiled, %d skipped, %d already present' % (done, skipped, present))
+    print('precompile: %d compiled, %d failure receipts, %d skipped, %d already present' %
+          (done, failed, skipped, present))
 
 
 if __name__ == '__main__':
