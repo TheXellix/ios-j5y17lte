@@ -11,10 +11,10 @@ typedef struct {
  unsigned queryHits,queryBarriers,mutationBarriers,mappingBarriers,capacityFlushes;
  uint64_t queryUS,transportUS,uploadUS,submitUS;
  uint64_t stagedBytes;
- char labels[A5NativeBatchMax][96];
+ char labels[A5NativeBatchMax][160];
 } A5NativeBatchSession;
 static _Thread_local A5NativeBatchSession *nativeBatch;
-static _Thread_local char nativeDrawLabel[96];
+static _Thread_local char nativeDrawLabel[160];
 void A5MaliSetNativeDrawLabel(const char *label){
  if(!label)label="";strlcpy(nativeDrawLabel,label,sizeof(nativeDrawLabel));
 }
