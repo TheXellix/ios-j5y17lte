@@ -26,6 +26,9 @@
     A5MaliCompiledSampler _samplers[4];
     NSArray *_owners;
     NSString *_vertexName,*_fragmentName;
+    /* NUL-terminated copies owned by the entry: UTF8String may return an
+     * autoreleased buffer that is gone when the draw is committed. */
+    NSData *_vertexCName,*_fragmentCName;
 }
 - (const A5MaliCompiledProfile *)profile { return &_profile; }
 @end
@@ -495,6 +498,9 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
         return rejectPipeline(vf,ff,@"descriptor.color0-format",unsupported(@"dynamic target requires BGRA8Unorm, BGR5A1Unorm or a packed RGBA16Float variant"),error);
     A5MaliDynamicPipelineEntry *e=[A5MaliDynamicPipelineEntry new];
     e->_owners=@[vs?:v,fs?:f];e->_vertexName=[vf.name copy];e->_fragmentName=[ff.name copy];
+    {const char *vn=e->_vertexName.UTF8String?:"",*fn=e->_fragmentName.UTF8String?:"";
+     e->_vertexCName=[NSData dataWithBytes:vn length:strlen(vn)+1];
+     e->_fragmentCName=[NSData dataWithBytes:fn length:strlen(fn)+1];}
     e->_pass=(A5MaliCompiledPass){.passID=A5MaliDynamicProfileID,
         .vertex=vs?*vs.shader:vp->passes[0].vertex,.fragment=fs?*fs.shader:fp->passes[0].fragment};
     unsigned resourceCount=0,pushCount=0;
@@ -542,7 +548,7 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
     if(immutableCount>4)return rejectPipeline(vf,ff,@"immutable-samplers.count",unsupported(@"too many immutable samplers"),error);
     if(immutableCount)memcpy(e->_samplers,fs.immutableSamplers,immutableCount*sizeof(e->_samplers[0]));
     e->_profile=(A5MaliCompiledProfile){.profileID=A5MaliDynamicProfileID,.name="dynamic-reflected-QC",
-        .vertexName=e->_vertexName.UTF8String,.fragmentName=e->_fragmentName.UTF8String,
+        .vertexName=e->_vertexCName.bytes,.fragmentName=e->_fragmentCName.bytes,
         .colorFormats={(uint32_t)target},.flags=A5MaliProfileDynamicStages|A5MaliProfileSourceOverBlend|
             ([fs.nativeABI[@"shader_anisotropy"] isEqual:@1]?A5MaliProfileShaderAnisotropy:0)|
             A5MaliProfileRenderState|(shaderBlend?A5MaliProfileShaderBlend:0)|
