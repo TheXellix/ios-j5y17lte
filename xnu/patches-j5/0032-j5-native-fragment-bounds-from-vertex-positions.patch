@@ -1,0 +1,145 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp b/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
+index fdeb69e..64a5b0a 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
+@@ -347,7 +347,7 @@ A5XELTEGPUUserClient::query(IOExternalMethodArguments *args)
+         (a5g3d_as1_native_available() ? ((1u<<16)|(1u<<17)|(1u<<18)|(1u<<19)) : 0);
+     result.gpuCommandsSupported = 15 |
+         (a5g3d_as1_read_surf_available() ? 16 : 0) |
+-        (a5g3d_as1_native_available() ? (A5NativeCapability|A5NativeBatchCapability) : 0);
++        (a5g3d_as1_native_available() ? (A5NativeCapability|A5NativeBatchCapability|A5NativeBoundsCapability) : 0);
+     memcpy(args->structureOutput, &result, sizeof(result));
+     args->structureOutputSize = sizeof(result);
+     return kIOReturnSuccess;
+diff --git a/iokit/Kernel/arm/A5XELTENativeABI.h b/iokit/Kernel/arm/A5XELTENativeABI.h
+index 6b64ac8..f76e839 100644
+--- a/iokit/Kernel/arm/A5XELTENativeABI.h
++++ b/iokit/Kernel/arm/A5XELTENativeABI.h
+@@ -9,7 +9,9 @@ enum { A5NativeQuerySelector=17, A5NativeSubmitSelector=18,
+        A5NativeCapability=32, A5NativeBatchCapability=64, A5NativeBatchSelector=20, A5NativeBatchMax=8, A5NativeSlots=4, A5NativeJobBytes=0x40000,
+        A5NativeJobVA=0x18000000, A5NativePreloadOffset=0x1800,
+        A5NativeBulkWriteSelector=19,
+-       A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000 };
++       A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000,
++       /* j5y17lte: the kernel accepts a coverage hint in SubmitRequest.reserved */
++       A5NativeBoundsCapability=128 };
+ typedef struct { uint32_t version,size,reserved0,reserved1; } A5NativeHeader;
+ typedef struct {
+     A5NativeHeader header;
+@@ -61,6 +63,22 @@ static inline int A5NativeSameMapping(const A5NativeSubmitRequest *a,const A5Nat
+  for(unsigned i=0;i<A5NativeSlots;i++)if(a->surfaces[i]!=b->surfaces[i]||a->buffers[i]!=b->buffers[i])return 0;
+  return 1;
+ }
++/* j5y17lte coverage hint (SubmitRequest.reserved, only with
++ * A5NativeBoundsCapability): bit31 set, bits 12..22 the vertex count (1..2047),
++ * bits 0..11 the 64-byte-aligned offset/64 of the vertex job's screen-space
++ * float4 position plane inside the job. After the vertex/tiler chain the
++ * kernel shrinks the fragment job's tile bounds to the positions' rectangle
++ * (never grows them). Zero means no hint. */
++static inline uint32_t A5NativeBoundsHint(uint32_t positionOffset,uint32_t count)
++{ return (positionOffset&63u)||positionOffset>>18||!count||count>2047u?0u:
++    0x80000000u|(count<<12)|(positionOffset>>6); }
++static inline int A5NativeBoundsHintValid(uint32_t hint,uint32_t jobBytes,int clear)
++{
++    if(!hint)return 1;
++    uint32_t count=(hint>>12)&2047u,offset=(hint&4095u)<<6;
++    return !clear&&(hint&0x7f800000u)==0u&&(hint>>31)&&count&&
++        offset>=0x2000u&&offset<jobBytes&&count*16u<=jobBytes-offset;
++}
+ /* Bounded descriptor topology shared by the transport and kernel. Preload is
+  * an optional real v4 textured TILER job, not a framebuffer address alias.
+  * Return -1 for invalid, 0 for the original chain/clear, 1 for preload.
+diff --git a/iokit/Kernel/arm/A5XELTENativeClient.inc b/iokit/Kernel/arm/A5XELTENativeClient.inc
+index 5e0681c..6c50105 100644
+--- a/iokit/Kernel/arm/A5XELTENativeClient.inc
++++ b/iokit/Kernel/arm/A5XELTENativeClient.inc
+@@ -131,7 +131,7 @@ IOReturn A5XELTEGPUUserClient::nativeSubmit(IOExternalMethodArguments *args)
+     }
+     A5NativeSubmitRequest r={};memcpy(&r,copy,sizeof(r));
+     if (!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader *>(&r.header),sizeof(r)) ||
+-        r.jobBytes!=A5NativeJobBytes || r.reserved || !r.mappingEpoch ||
++        r.jobBytes!=A5NativeJobBytes || !A5NativeBoundsHintValid(r.reserved,r.jobBytes,r.profileID==0) || !r.mappingEpoch ||
+         (r.readSurfaces|r.writeSurfaces|r.readBuffers)&~15u || !r.writeSurfaces) {
+         IOFreeData(copy,bytes);return kIOReturnBadArgument;
+     }
+@@ -205,7 +205,7 @@ IOReturn A5XELTEGPUUserClient::nativeBatch(IOExternalMethodArguments*args){
+  for(unsigned i=0;i<header.count;i++){
+   uint8_t*entry=copy+sizeof(header)+i*stride;A5NativeSubmitRequest r;memcpy(&r,entry,sizeof(r));
+   bool profile=r.profileID==0||(r.profileID>=99&&r.profileID<=108)||(r.profileID>=200&&r.profileID<=208)||(r.profileID>=300&&r.profileID<=302)||r.profileID==500||r.profileID==501||(r.profileID>=600&&r.profileID<=606)||r.profileID==65536;
+-  if(!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&r.header),sizeof(r))||r.reserved||!r.mappingEpoch||r.jobBytes!=A5NativeJobBytes||((r.readSurfaces|r.writeSurfaces|r.readBuffers)&~15u)||!r.writeSurfaces||!profile||!A5NativeSameEpoch(&first,&r)||A5NativeCheckJobChain(entry+sizeof(r),r.jobBytes,A5NativeJobVA,r.vertexOffset,r.tilerOffset,r.fragmentOffset,r.profileID==0)<0){kr=kIOReturnBadArgument;break;}
++  if(!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&r.header),sizeof(r))||!A5NativeBoundsHintValid(r.reserved,r.jobBytes,r.profileID==0)||!r.mappingEpoch||r.jobBytes!=A5NativeJobBytes||((r.readSurfaces|r.writeSurfaces|r.readBuffers)&~15u)||!r.writeSurfaces||!profile||!A5NativeSameEpoch(&first,&r)||A5NativeCheckJobChain(entry+sizeof(r),r.jobBytes,A5NativeJobVA,r.vertexOffset,r.tilerOffset,r.fragmentOffset,r.profileID==0)<0){kr=kIOReturnBadArgument;break;}
+   uint32_t reads=0,writes=0,buffers=0;
+   kr=r.mappingEpoch!=fMappingEpoch?kIOReturnNotReady:nativeTokensLocked(r.surfaces,r.buffers,nullptr,r.readSurfaces,r.writeSurfaces,r.readBuffers,&reads,&writes,&buffers);
+   if(kr)break;allReads|=reads;allWrites|=writes;allBuffers|=buffers;
+diff --git a/iokit/Kernel/arm/A5XELTENativeQueue.inc b/iokit/Kernel/arm/A5XELTENativeQueue.inc
+index d887f57..d6e540d 100644
+--- a/iokit/Kernel/arm/A5XELTENativeQueue.inc
++++ b/iokit/Kernel/arm/A5XELTENativeQueue.inc
+@@ -31,6 +31,58 @@ bool a5g3d_as1_native_span(A5G3DAS1Context *ctx,uint32_t slot,bool buffer,
+     IOLockUnlock(lock); return ok;
+ }
+ 
++/* j5y17lte: shrink the fragment job to the tiles the draw can touch. The
++ * vertex job has written screen-space float4 positions (Midgard lowers the
++ * viewport transform into the vertex shader). Tiles outside the rectangle
++ * get no primitive from this draw, so preload+writeback there would only
++ * rewrite unchanged pixels. Any non-finite or unusual position keeps the
++ * original bounds. Returns false only on a cache maintenance error. */
++static bool a5g3d_as1_native_shrink(A5G3DAS1Context *ctx,const A5NativeSubmitRequest &r)
++{
++    if (!r.reserved) return true;
++    const uint32_t count=(r.reserved>>12)&2047u,offset=(r.reserved&4095u)<<6;
++    if (ctx->jobs->performOperation(kIOMemoryIncoherentIOFlush,offset,count*16u)!=kIOReturnSuccess)
++        return false;
++    uint8_t *job=static_cast<uint8_t *>(ctx->jobs->getBytesNoCopy());
++    /* No FPU in -mkernel code: floor() of each IEEE-754 binary32 by bits. */
++    const uint32_t *p=reinterpret_cast<const uint32_t *>(job+offset);
++    int minX=0x7fffffff,minY=0x7fffffff,maxX=-0x7fffffff-1,maxY=-0x7fffffff-1;
++    for (uint32_t i=0;i<count;i++) {
++        int v[2];
++        for (uint32_t c=0;c<2;c++) {
++            const uint32_t b=p[i*4+c];
++            const int e=(int)((b>>23)&255u)-127;
++            if (e>=14) return true;          /* |x|>=16384, Inf or NaN */
++            if (!(b&0x7fffffffu)) { v[c]=0; continue; }
++            if (e<0) { v[c]=(b>>31)?-1:0; continue; }
++            const uint32_t m=(b&0x7fffffu)|0x800000u,sh=23u-(uint32_t)e;
++            const int ip=(int)(m>>sh);const bool frac=(m&((1u<<sh)-1u))!=0;
++            v[c]=(b>>31)?-ip-(frac?1:0):ip;
++        }
++        if (v[0]<minX) minX=v[0]; if (v[0]>maxX) maxX=v[0];
++        if (v[1]<minY) minY=v[1]; if (v[1]>maxY) maxY=v[1];
++    }
++    uint32_t *payload=reinterpret_cast<uint32_t *>(job+r.fragmentOffset+32);
++    const uint32_t w0=payload[0],w1=payload[1];
++    int bx0=(int)(w0&0xfffu),by0=(int)((w0>>16)&0xfffu),bx1=(int)(w1&0xfffu),by1=(int)((w1>>16)&0xfffu);
++    /* One pixel of margin for rasterisation rules, then whole 16x16 tiles. */
++    int tx0=(minX-1)>>4,ty0=(minY-1)>>4,tx1=(maxX+1)>>4,ty1=(maxY+1)>>4;
++    if (tx0<bx0) tx0=bx0; if (ty0<by0) ty0=by0;
++    if (tx1>bx1) tx1=bx1; if (ty1>by1) ty1=by1;
++    /* Entirely outside: keep one tile of the original bounds (no-op work). */
++    if (tx0>tx1 || ty0>ty1) { tx0=tx1=bx0; ty0=ty1=by0; }
++    static unsigned reports=0;
++    if (++reports<=16 || !(reports&255))
++        IOLog("A5XELTE G3D native bounds: count=%u tiles %d,%d..%d,%d -> %d,%d..%d,%d\n",
++            count,bx0,by0,bx1,by1,tx0,ty0,tx1,ty1);
++    if (tx0==bx0 && ty0==by0 && tx1==bx1 && ty1==by1) return true;
++    payload[0]=(w0&~0x0fff0fffu)|(uint32_t)tx0|((uint32_t)ty0<<16);
++    payload[1]=(w1&~0x0fff0fffu)|(uint32_t)tx1|((uint32_t)ty1<<16);
++    __sync_synchronize();
++    return ctx->jobs->performOperation(kIOMemoryIncoherentIOStore,
++        r.fragmentOffset+32,8)==kIOReturnSuccess;
++}
++
+ static A5G3DAS1SubmitStatus a5g3d_as1_submit_native_locked(A5G3DAS1Context *ctx,
+     const A5NativeSubmitRequest &r,const uint8_t *input,
+     uint32_t reads,uint32_t writes,uint32_t buffers,
+@@ -94,6 +146,8 @@ static A5G3DAS1SubmitStatus a5g3d_as1_submit_native_locked(A5G3DAS1Context *ctx,
+     if (!clear) status=a5g3d_as1_run_job(ctx,gpu,1,
+         r.vertexOffset,out,&out->tilerFence,&started,r.tilerOffset,200000,
+         chain==1?A5NativePreloadOffset:UINT32_MAX,true,false);
++    if (status==kAS1SubmitCompleted && !clear && !a5g3d_as1_native_shrink(ctx,r))
++        status=kAS1SubmitIOError;
+     if (status==kAS1SubmitCompleted)
+         status=a5g3d_as1_run_job(ctx,gpu,0,r.fragmentOffset,out,
+             &out->fragmentFence,&started,0,200000,UINT32_MAX,true,!clear);
