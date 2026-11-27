@@ -1772,6 +1772,10 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     struct { A5RuntimeSampler values[31]; } samplerSnapshots={0};
     NSMutableArray<A5MaliMetalTexture *> *mappedImages=[NSMutableArray new];
     NSMutableArray<NSNumber *> *imageSlots=[NSMutableArray new];
+    /* j5y17lte: fragment texture slot -> earlier slot that binds the very
+     * same read-only texture object (QuartzCore samples one mipmapped image
+     * through two slots). The duplicate reuses that mapping. */
+    NSMutableDictionary<NSNumber *,NSNumber *> *sharedImageSlots=[NSMutableDictionary new];
     uint32_t readImages=0;
     for(uint32_t i=0;i<profile->passCount;++i){
         uint32_t target=profile->passes[i].logicalTarget;
@@ -1834,9 +1838,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
             image.buffer.storageMode!=MTLStorageModeShared || !image.buffer.readyForRead ||
             image.mipmapLevelCount!=1 || image.sampleCount!=1))return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-buffer-contract",r,image,nil,nil,0);
         if(!image.buffer && !image.privateSurface)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-backing",r,image,nil,nil,0);
+        NSNumber *sharedSlot=nil;
         for(NSUInteger j=0;j<mappedImages.count;++j){A5MaliMetalTexture *old=mappedImages[j];
+            if(old==image && (readImages&(1u<<j)) && imageSlots[j].unsignedIntValue>=32){sharedSlot=imageSlots[j];break;}
             if(textureBackingAliases(image,old))return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-alias",r,image,nil,nil,0);
         }
+        if(sharedSlot){sharedImageSlots[@(32+r->metalIndex)]=sharedSlot;continue;}
         if(mappedImages.count==A5NativeSlots)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"image-slot-limit",r,image,nil,nil,0);
         readImages|=1u<<mappedImages.count;[mappedImages addObject:image];[imageSlots addObject:@(32+r->metalIndex)];
     }
@@ -2188,6 +2195,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                             else if(!A5MaliRuntimeImageForTexture(t,level,t.privateSurface,&s,A5MaliRead,&chain->levels[level]))return kIOReturnBadArgument;
                         }
                     }
+                }
+                for(NSNumber *duplicate in sharedImageSlots){
+                    unsigned to=duplicate.unsignedIntValue-32,from=sharedImageSlots[duplicate].unsignedIntValue-32;
+                    if(to>=31||from>=31)return kIOReturnBadArgument;
+                    command.fragmentTextures[to]=command.fragmentTextures[from];
+                    command.fragmentMips[to]=command.fragmentMips[from];
                 }
                 for(NSUInteger stage=0;stage<2;++stage)
                     for(NSNumber *slot in handles[stage]){
