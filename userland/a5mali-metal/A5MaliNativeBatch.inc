@@ -11,8 +11,13 @@ typedef struct {
  unsigned queryHits,queryBarriers,mutationBarriers,mappingBarriers,capacityFlushes;
  uint64_t queryUS,transportUS,uploadUS,submitUS;
  uint64_t stagedBytes;
+ char labels[A5NativeBatchMax][96];
 } A5NativeBatchSession;
 static _Thread_local A5NativeBatchSession *nativeBatch;
+static _Thread_local char nativeDrawLabel[96];
+void A5MaliSetNativeDrawLabel(const char *label){
+ if(!label)label="";strlcpy(nativeDrawLabel,label,sizeof(nativeDrawLabel));
+}
 /* Retain at most four 1MiB idle arenas. Large transient allocations are
  * released normally; only real terminal work can enter this pool. */
 typedef struct { A5NativeUploadArena arenas[4]; } A5NativeUploadPool;
@@ -73,7 +78,12 @@ static kern_return_t a5NativeBatchFlush(void){
  A5NativeBatchResult r={0};size_t size=sizeof(r);submissionMayBeActive=1;
  uint64_t submitBegin=A5MaliWallUS();
  kern_return_t kr=s->call(s->context,A5NativeBatchSelector,s->packet,bytes,&r,&size);
- s->submitUS+=A5MaliElapsedUS(submitBegin,A5MaliWallUS());
+ uint64_t submitElapsed=A5MaliElapsedUS(submitBegin,A5MaliWallUS());s->submitUS+=submitElapsed;
+ /* j5y17lte speed work: wall time of every kernel batch and what it held. */
+ {static unsigned reports;if(++reports<=1500){
+  fprintf(stderr,"A5J5 batch time: us=%llu count=%u",(unsigned long long)submitElapsed,count);
+  for(unsigned i=0;i<count;i++)fprintf(stderr," [%s]",s->labels[i][0]?s->labels[i]:"?");
+  fprintf(stderr,"\n");}}
  if(kr||r.status){
   fprintf(stderr,"A5J5 batch failed: kr=%x status=%u count=%u completed=%u",(unsigned)kr,r.status,count,r.completedCount);
   for(unsigned i=0;i<count;i++){A5NativeSubmitRequest q;memcpy(&q,s->packet+sizeof(h)+i*(sizeof(q)+A5NativeJobBytes),sizeof(q));
@@ -159,7 +169,8 @@ static kern_return_t a5NativeBatchAppend(const A5NativeSubmitRequest*q,const voi
    if(s->count==A5NativeBatchMax)++s->capacityFlushes;else ++s->mappingBarriers;
    kern_return_t kr=a5NativeBatchFlush();if(kr)return kr;}}
  size_t offset=sizeof(A5NativeBatchRequest)+s->count*(sizeof(*q)+A5NativeJobBytes);
- memcpy(s->packet+offset,q,sizeof(*q));memcpy(s->packet+offset+sizeof(*q),jobs,A5NativeJobBytes);++s->count;s->accepted=1;s->awaitingUploadSubmit=0;return KERN_SUCCESS;
+ memcpy(s->packet+offset,q,sizeof(*q));memcpy(s->packet+offset+sizeof(*q),jobs,A5NativeJobBytes);
+ strlcpy(s->labels[s->count],nativeDrawLabel,sizeof(s->labels[0]));nativeDrawLabel[0]=0;++s->count;s->accepted=1;s->awaitingUploadSubmit=0;return KERN_SUCCESS;
 }
 int A5MaliNativeBatchAccepted(A5MaliClient*c){return nativeBatch&&nativeBatch->client==c&&nativeBatch->accepted;}
 static void a5NativeArenaQuarantine(A5NativeBatchSession*s,uint64_t handle){

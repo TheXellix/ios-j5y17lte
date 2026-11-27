@@ -22,6 +22,8 @@ void A5MaliBeginNativeSubmissionTracking(void);
  * End flushes actual hardware and restores the original transport. */
 kern_return_t A5MaliBeginNativeBatch(A5MaliClient *);
 kern_return_t A5MaliEndNativeBatch(A5MaliClient *,int commit,A5MaliFence *);
+/* j5y17lte: diagnostic label of the next submitted native job (copied). */
+void A5MaliSetNativeDrawLabel(const char *label);
 int A5MaliNativeBatchAccepted(A5MaliClient *);
 typedef struct {
     const void *bytes;

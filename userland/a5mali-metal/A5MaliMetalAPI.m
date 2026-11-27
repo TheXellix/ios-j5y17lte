@@ -1077,6 +1077,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
             .vertexOffset=UINT32_MAX,.tilerOffset=UINT32_MAX,.fragmentOffset=0,
             .writeSurfaces=1,.profileID=0,.mappingEpoch=mapped.flags};
         submit.surfaces[0]=query.surfaces[0];
+        {char label[96];snprintf(label,sizeof(label),"clear %ux%u",(unsigned)clear.destination.width,(unsigned)clear.destination.height);A5MaliSetNativeDrawLabel(label);}
         kr=A5MaliSubmitNative(client,&submit,jobs.bytes,fence);
         logNativePhase(diagnosticID,"clear-submit18",0,kr);return kr;
     }];
@@ -1726,6 +1727,9 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
             .readBuffers=(1u<<handleCount)-1u,.profileID=profile->profileID,.mappingEpoch=mapped.flags};
         memcpy(submit.surfaces,query.surfaces,sizeof(submit.surfaces));
         memcpy(submit.buffers,query.buffers,sizeof(submit.buffers));
+        {char label[96];snprintf(label,sizeof(label),"blur%u %s %ux%u",(unsigned)profile->profileID,
+            profile->fragmentName?profile->fragmentName:"?",(unsigned)destination.width,(unsigned)destination.height);
+         A5MaliSetNativeDrawLabel(label);}
         result=A5MaliSubmitNative(client,&submit,jobs.bytes,fence);
         logNativePhase(diagnosticID,"blur-submit18",profile->profileID,result);return result;
     }];
@@ -2235,6 +2239,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                     .profileID=profile->passes[pass].passID,.mappingEpoch=mapped.flags};
                 memcpy(submit.surfaces,query.surfaces,sizeof(submit.surfaces));
                 memcpy(submit.buffers,query.buffers,sizeof(submit.buffers));
+                {char label[96];const A5RuntimeImage *t=&command.colorAttachments[pass];
+                 snprintf(label,sizeof(label),"%s %ux%u f%u sc%ux%u v%u i%u",
+                    profile->fragmentName?profile->fragmentName:"?",(unsigned)t->width,(unsigned)t->height,(unsigned)t->metalPixelFormat,
+                    (unsigned)command.draw.scissorWidth,(unsigned)command.draw.scissorHeight,
+                    (unsigned)command.draw.vertexCount,(unsigned)command.draw.indexCount);
+                 A5MaliSetNativeDrawLabel(label);}
                 kr=A5MaliSubmitNative(client,&submit,jobs.bytes,fence);
                 logNativePhase(diagnosticID,path?"path-submit18":"misc-submit18",profile->passes[pass].passID,kr);if(kr)return kr;
             }
