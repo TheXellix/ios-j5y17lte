@@ -156,6 +156,15 @@ static __attribute__((unused)) void logNativePhase(unsigned bufferID,const char 
         "A5XELTE Metal native phase: cb=%u phase=%s profile=%u result=%x\n",bufferID,phase,profile,(unsigned)result);
 }
 
+/* Every early refusal of a compiled misc draw names its source line. */
+static kern_return_t a5MiscReject(unsigned bufferID,int line,kern_return_t result)
+{
+    static _Atomic unsigned count;
+    if(atomic_fetch_add(&count,1)<64)
+        fprintf(stderr,"A5XELTE Metal misc reject: cb=%u line=%d result=%x\n",bufferID,line,(unsigned)result);
+    return result;
+}
+
 static void logIndexedRejection(unsigned bufferID,uint32_t profile,const char *reason,
     MTLPrimitiveType primitive,NSUInteger count,MTLIndexType indexType,id buffer,NSUInteger offset)
 {
@@ -1881,12 +1890,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 uint32_t maximum=0;
                 for(NSUInteger i=0;i<indexCount;++i){
                     uint32_t value=0;memcpy(&value,(const uint8_t *)indices.bytes+i*indexSize,indexSize);
-                    if(value>=vertexLimit)return kIOReturnBadArgument;
+                    if(value>=vertexLimit)return a5MiscReject(diagnosticID,__LINE__,kIOReturnBadArgument);
                     maximum=MAX(maximum,value);
                 }
                 submittedVertexCount=(NSUInteger)maximum+1;
                 A5MaliBufferBinding *vertices=bindings[0][@1];
-                if(vertices.length<A5MaliRuntimeVertexSpan(profile,(uint32_t)submittedVertexCount))return kIOReturnBadArgument;
+                if(vertices.length<A5MaliRuntimeVertexSpan(profile,(uint32_t)submittedVertexCount))return a5MiscReject(diagnosticID,__LINE__,kIOReturnBadArgument);
                 if(diagnosticTake(&indexedDrawDiagnosticCount,32))fprintf(stderr,
                     "A5XELTE Metal indexed: cb=%u profile=%u indices=%lu width=%lu offset=%lu vertices=%lu\n",
                     diagnosticID,profile->profileID,(unsigned long)indexCount,(unsigned long)indexSize,
@@ -1929,8 +1938,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 A5MaliPrivateBuffer *backing=image.buffer;
                 if(!backing)continue;
                 if(!(readImages&(1u<<i)) ||
-                    !backing.readyForRead || backing.length>A5NativeBufferMax)return kIOReturnBadArgument;
-                if(backing.length>4u*A5NativeBufferMax-uploadBytes)return kIOReturnNoResources;
+                    !backing.readyForRead || backing.length>A5NativeBufferMax)return a5MiscReject(diagnosticID,__LINE__,kIOReturnBadArgument);
+                if(backing.length>4u*A5NativeBufferMax-uploadBytes)return a5MiscReject(diagnosticID,__LINE__,kIOReturnNoResources);
                 uploadBytes+=backing.length;
                 NSMutableData *bytes=[NSMutableData dataWithLength:backing.length];
                 kern_return_t kr=[backing readBytesForSubmission:bytes.mutableBytes offset:0
@@ -1979,7 +1988,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                             required>A5MaliRuntimeMiscInlineCapacity((uint32_t)submittedVertexCount)-0x4000u;
                         if(vertexUpload)[storageSlots[stage] addObject:slot];
                         if([storageSlots[stage] containsObject:slot]){
-                            if(required>A5NativeBufferMax||required>4u*A5NativeBufferMax-uploadBytes)return kIOReturnNoResources;
+                            if(required>A5NativeBufferMax||required>4u*A5NativeBufferMax-uploadBytes)return a5MiscReject(diagnosticID,__LINE__,kIOReturnNoResources);
                             uploadBytes+=required;
                         }
                         NSData *data=nil;
@@ -1989,7 +1998,13 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                                 offset:binding.offset length:required client:client];
                             if(read)return read;data=copy;
                         }else data=[binding capturePrefixBytesForSubmission:required error:NULL];
-                        if(!data)return kIOReturnBadArgument;
+                        if(!data){
+                            fprintf(stderr,"A5XELTE Metal misc capture: cb=%u stage=%lu slot=%lu required=%lu bound=%lu offset=%lu buffer=%lu pad=%d handle=%d vertices=%lu\n",
+                                diagnosticID,(unsigned long)stage,(unsigned long)slot.unsignedIntegerValue,(unsigned long)required,
+                                (unsigned long)binding.length,(unsigned long)binding.offset,(unsigned long)binding.buffer.length,
+                                (int)pad,(int)!!binding.privateKernelHandle,(unsigned long)submittedVertexCount);
+                            return a5MiscReject(diagnosticID,__LINE__,kIOReturnBadArgument);
+                        }
                         if(!stage && slot.unsignedIntegerValue==1 &&
                            (profile->profileID==602 || textured) && profile->profileID!=A5MaliDynamicProfileID &&
                            diagnosticTake(&inputVertexDiagnosticCount,8)){
@@ -2020,7 +2035,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                     }
                     if(handle){
                         unsigned i=0;for(;i<bufferCount;++i)if(query.buffers[i]==handle)break;
-                        if(i==bufferCount){if(bufferCount==A5NativeSlots)return kIOReturnNoResources;query.buffers[bufferCount++]=handle;}
+                        if(i==bufferCount){if(bufferCount==A5NativeSlots)return a5MiscReject(diagnosticID,__LINE__,kIOReturnNoResources);query.buffers[bufferCount++]=handle;}
                         handles[stage][slot]=@(i);
                     }
                     if(stage)command.draw.fragmentBuffers[slot.unsignedIntegerValue]=native;
@@ -2029,11 +2044,11 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
             /* Physical staging BOs are assigned after every logical upload is
              * known. All snapshots retain their original binding identity. */
             if(uploads.count){
-                if(uploads.count>A5MaliUploadLimit)return kIOReturnNoResources;
+                if(uploads.count>A5MaliUploadLimit)return a5MiscReject(diagnosticID,__LINE__,kIOReturnNoResources);
                 A5MaliUploadInput inputs[A5MaliUploadLimit]={0};
                 for(NSUInteger i=0;i<uploads.count;i++){
                     NSData *bytes=uploads[i][@"data"];
-                    if(bytes.length>UINT32_MAX)return kIOReturnBadArgument;
+                    if(bytes.length>UINT32_MAX)return a5MiscReject(diagnosticID,__LINE__,kIOReturnBadArgument);
                     inputs[i]=(A5MaliUploadInput){(uint32_t)bytes.length,64};
                 }
                 A5MaliUploadPlan plan;
@@ -2110,7 +2125,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 if(profile->passes[pass].vertex.tlsBytes||profile->passes[pass].fragment.tlsBytes){
                     uint64_t tls=a5j5ThreadStorageHandle(client);
                     if(!tls)return kIOReturnNoMemory;
-                    if(bufferCount==A5NativeSlots)return kIOReturnNoResources;
+                    if(bufferCount==A5NativeSlots)return a5MiscReject(diagnosticID,__LINE__,kIOReturnNoResources);
                     tlsIndex=(int)bufferCount;query.buffers[bufferCount++]=tls;break;
                 }
             for(uint32_t pass=0;pass<profile->passCount;++pass){
