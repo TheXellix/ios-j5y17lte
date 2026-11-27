@@ -54,6 +54,8 @@ uint32_t A5MaliRuntimeVertexSpan(const A5MaliCompiledProfile *,uint32_t count);
 uint32_t A5MaliRuntimeMiscVertexLimit(const A5MaliCompiledProfile *);
 /* CPU snapshot arena shrinks when large output planes borrow its tail. */
 uint32_t A5MaliRuntimeMiscInlineCapacity(uint32_t vertexCount);
+/* j5y17lte: job offset of the vertex job's screen-space float4 position plane. */
+uint32_t A5MaliRuntimeMiscPositionOffset(const A5RuntimeDraw *draw);
 int A5MaliEncodeRuntimeMiscPass(const A5RuntimeMiscDraw *, void *, size_t);
 #ifdef __cplusplus
 }

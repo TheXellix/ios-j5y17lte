@@ -9,7 +9,9 @@ enum { A5NativeQuerySelector=17, A5NativeSubmitSelector=18,
        A5NativeCapability=32, A5NativeBatchCapability=64, A5NativeBatchSelector=20, A5NativeBatchMax=8, A5NativeSlots=4, A5NativeJobBytes=0x40000,
        A5NativeJobVA=0x18000000, A5NativePreloadOffset=0x1800,
        A5NativeBulkWriteSelector=19,
-       A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000 };
+       A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000,
+       /* j5y17lte: the kernel accepts a coverage hint in SubmitRequest.reserved */
+       A5NativeBoundsCapability=128 };
 typedef struct { uint32_t version,size,reserved0,reserved1; } A5NativeHeader;
 typedef struct {
     A5NativeHeader header;
@@ -60,6 +62,22 @@ static inline int A5NativeSameMapping(const A5NativeSubmitRequest *a,const A5Nat
  if(a->mappingEpoch!=b->mappingEpoch)return 0;
  for(unsigned i=0;i<A5NativeSlots;i++)if(a->surfaces[i]!=b->surfaces[i]||a->buffers[i]!=b->buffers[i])return 0;
  return 1;
+}
+/* j5y17lte coverage hint (SubmitRequest.reserved, only with
+ * A5NativeBoundsCapability): bit31 set, bits 12..22 the vertex count (1..2047),
+ * bits 0..11 the 64-byte-aligned offset/64 of the vertex job's screen-space
+ * float4 position plane inside the job. After the vertex/tiler chain the
+ * kernel shrinks the fragment job's tile bounds to the positions' rectangle
+ * (never grows them). Zero means no hint. */
+static inline uint32_t A5NativeBoundsHint(uint32_t positionOffset,uint32_t count)
+{ return (positionOffset&63u)||positionOffset>>18||!count||count>2047u?0u:
+    0x80000000u|(count<<12)|(positionOffset>>6); }
+static inline int A5NativeBoundsHintValid(uint32_t hint,uint32_t jobBytes,int clear)
+{
+    if(!hint)return 1;
+    uint32_t count=(hint>>12)&2047u,offset=(hint&4095u)<<6;
+    return !clear&&(hint&0x7f800000u)==0u&&(hint>>31)&&count&&
+        offset>=0x2000u&&offset<jobBytes&&count*16u<=jobBytes-offset;
 }
 /* Bounded descriptor topology shared by the transport and kernel. Preload is
  * an optional real v4 textured TILER job, not a framebuffer address alias.

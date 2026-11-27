@@ -68,7 +68,9 @@ kern_return_t A5MaliSubmitNative(A5MaliClient *c,const A5NativeSubmitRequest *q,
 {
  if (f) memset(f,0,sizeof(*f));
  if (!q || !jobs || !f || q->jobBytes!=A5NativeJobBytes ||
-   !valid(q->header,sizeof(*q),sizeof(*q)) || q->reserved || !q->mappingEpoch ||
+   !valid(q->header,sizeof(*q),sizeof(*q)) || !q->mappingEpoch ||
+   (q->reserved && (!(c->gpuCommandsSupported&A5NativeBoundsCapability) ||
+    !A5NativeBoundsHintValid(q->reserved,q->jobBytes,q->profileID==0))) ||
    (q->readSurfaces|q->writeSurfaces|q->readBuffers)&~15u || !q->writeSurfaces ||
    q->fragmentOffset>=q->jobBytes-256 || (q->fragmentOffset&15u) ||
    (q->profileID==0 ? (q->vertexOffset!=UINT32_MAX || q->tilerOffset!=UINT32_MAX) :

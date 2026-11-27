@@ -42,6 +42,7 @@ static unsigned position_offset(const A5RuntimeDraw*r){return r->vertexCount>A5R
 static unsigned point_size_offset(const A5RuntimeDraw*r){return r->vertexCount>A5RuntimeMaxVertices?position_offset(r)+aligned_plane(r->vertexCount*16):PSIZ;}
 static unsigned varying_offset(const A5RuntimeDraw*r){return r->vertexCount>A5RuntimeMaxVertices?point_size_offset(r)+aligned_plane(r->vertexCount*2):VARY_DATA;}
 static unsigned varying_step(const A5RuntimeDraw*r){return r->vertexCount>A5RuntimeMaxVertices?aligned_plane(r->vertexCount*8):0x1000;}
+uint32_t A5MaliRuntimeMiscPositionOffset(const A5RuntimeDraw*r){return position_offset(r);}
 uint32_t A5MaliRuntimeMiscInlineCapacity(uint32_t count){return (count>A5RuntimeMiscCompactVertices?LARGE_POS:ARENA_END)-ARENA;}
 _Static_assert(MALI_ATTRIBUTE_BUFFER_LENGTH == 16, "v4 attribute table stride");
 /* ATTRIBUTE buffer_index counts 16-byte descriptors, not 32-byte allocations.

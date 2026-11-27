@@ -2237,6 +2237,12 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                     .fragmentOffset=A5RuntimeFragmentOffset,.readSurfaces=surfaceReads|(1u<<pass),
                     .writeSurfaces=1u<<pass,.readBuffers=(1u<<bufferCount)-1u,
                     .profileID=profile->passes[pass].passID,.mappingEpoch=mapped.flags};
+                /* j5y17lte: let the kernel shrink the fragment job to the
+                 * tiles this draw's triangles cover (A5NativeBoundsCapability). */
+                if(!path && (client->gpuCommandsSupported&A5NativeBoundsCapability) &&
+                   (command.draw.primitive==A5RuntimeTriangle||command.draw.primitive==A5RuntimeTriangleStrip) &&
+                   getenv("A5J5_NO_BOUNDS")==NULL)
+                    submit.reserved=A5NativeBoundsHint(A5MaliRuntimeMiscPositionOffset(&command.draw),command.draw.vertexCount);
                 memcpy(submit.surfaces,query.surfaces,sizeof(submit.surfaces));
                 memcpy(submit.buffers,query.buffers,sizeof(submit.buffers));
                 {char label[96];const A5RuntimeImage *t=&command.colorAttachments[pass];
