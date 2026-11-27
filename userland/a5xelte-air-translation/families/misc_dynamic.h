@@ -181,6 +181,18 @@ static int a5_dynamic_analyze(nir_shader *nir,const struct a5_dynamic_profile *p
          if(!a5_dynamic_io_add(info->inputs,&info->input_count,in,false))return 0;
       }else if(in->intrinsic==nir_intrinsic_store_output){
          if(!a5_dynamic_io_add(info->outputs,&info->output_count,in,true))return 0;
+      }else if(in->intrinsic==nir_intrinsic_store_raw_output_pan){
+         /* j5y17lte: an RGBA16Float RT0 (blend format 115) is packed by
+          * a5_lower_native_rgba16 into RAW64 tile-buffer words. Its logical
+          * ABI is still the original float4 colour output of RT0. */
+         if(nir->info.stage!=MESA_SHADER_FRAGMENT || !profile->blend.enabled ||
+            profile->blend.format!=115 ||
+            nir_intrinsic_io_semantics(in).location!=FRAG_RESULT_DATA0 || nir_intrinsic_base(in)){
+            fprintf(stderr,"dynamic raw output outside the RGBA16 RT0 contract\n");return 0;
+         }
+         struct a5_dynamic_io v={FRAG_RESULT_DATA0,0,0,4,32};
+         unsigned i=0;for(;i<info->output_count;i++)if(!memcmp(info->outputs+i,&v,sizeof(v)))break;
+         if(i==info->output_count){if(info->output_count>=A5_DYNAMIC_MAX_IO)return 0;info->outputs[info->output_count++]=v;}
       }else if(in->intrinsic==nir_intrinsic_ddx || in->intrinsic==nir_intrinsic_ddy){
          if(nir->info.stage!=MESA_SHADER_FRAGMENT || !in->def.num_components ||
             in->def.num_components>4 || in->def.bit_size!=32 ||
