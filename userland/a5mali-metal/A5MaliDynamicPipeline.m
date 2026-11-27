@@ -559,7 +559,7 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
      * did for their static families. */
     MTLRenderPipelineColorAttachmentDescriptor *rt1=d.colorAttachments[1];
     if(rt1.pixelFormat==MTLPixelFormatBGRA8Unorm||rt1.pixelFormat==MTLPixelFormatRGBA8Unorm||
-       rt1.pixelFormat==MTLPixelFormatBGR5A1Unorm){
+       rt1.pixelFormat==MTLPixelFormatBGR5A1Unorm||rt1.pixelFormat==MTLPixelFormatRGBA16Float){
         e->_profile.colorFormats[1]=(uint32_t)rt1.pixelFormat;
         e->_attachments[1].attachments[1]=attachmentState(rt1);
     }

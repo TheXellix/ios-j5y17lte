@@ -438,11 +438,11 @@ static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
     !p->resourceCount||p->resourceCount>16||!p->resources||
     !p->pushFieldCount||p->pushFieldCount>16||!p->pushFields||
     p->attachmentContractCount!=2||!p->attachmentContracts)A5_CONTRACT_REJECT;
- /* j5y17lte: an inactive RT1 declared by QuartzCore (BGRA8/RGBA8/BGR5A1)
+ /* j5y17lte: an inactive RT1 declared by QuartzCore (BGRA8/RGBA8/BGR5A1/RGBA16F)
   * is allowed: the dynamic fragment writes location 4 (RT0) only and this
   * emitter binds RT0 alone, so RT1 is never touched by the GPU. */
  for(unsigned i=1;i<8;++i)if(p->colorFormats[i]&&
-    (i!=1||(p->colorFormats[1]!=80&&p->colorFormats[1]!=70&&p->colorFormats[1]!=43)))A5_CONTRACT_REJECT;
+    (i!=1||(p->colorFormats[1]!=80&&p->colorFormats[1]!=70&&p->colorFormats[1]!=43&&p->colorFormats[1]!=115)))A5_CONTRACT_REJECT;
  static const unsigned formats[]={31,29,29,27};
  const A5MaliCompiledVertexLayout*l=p->layouts;
  if(l->index!=1||l->stride<8||l->stride>2048||(l->stride&3)||l->stepFunction!=1||l->stepRate!=1)A5_CONTRACT_REJECT;
