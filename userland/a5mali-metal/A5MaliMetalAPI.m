@@ -1848,6 +1848,27 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     NSArray<NSMutableSet<NSNumber *> *> *paddedSlots=@[[NSMutableSet new],[NSMutableSet new]];
     if(profile->profileID==206 || (profile->profileID>=600 && profile->profileID<=606) || profile->profileID==A5MaliDynamicProfileID)
         windows[0][@1]=@(A5MaliRuntimeVertexSpan(profile,(uint32_t)(indexed?1:count)));
+    /* j5y17lte: a zero span means the emitter cannot address this vertex
+     * layout. Refuse the draw now (it is skipped) instead of failing the whole
+     * command buffer at commit, and say which contract line refused it. */
+    if(profile->profileID==A5MaliDynamicProfileID && !windows[0][@1].unsignedIntegerValue){
+        extern unsigned a5_dynamic_contract_reject_line;
+        a5_dynamic_contract_reject_line=0;
+        int supported=A5MaliDynamicRuntimeProfileSupported(profile);
+        static atomic_uint spanDiagnostics;
+        if(diagnosticTake(&spanDiagnostics,8)){
+            fprintf(stderr,"A5XELTE Metal vertex span zero: cb=%u vertex=%s fragment=%s supported=%d contract_line=%u flags=%x attributes=%u stride=%u formats=%u/%u count=%lu\n",
+                _buffer.diagnosticID,profile->vertexName?profile->vertexName:"?",profile->fragmentName?profile->fragmentName:"?",
+                supported,a5_dynamic_contract_reject_line,(unsigned)profile->flags,(unsigned)profile->attributeCount,
+                profile->layouts?(unsigned)profile->layouts[0].stride:0,(unsigned)profile->colorFormats[0],(unsigned)profile->colorFormats[1],
+                (unsigned long)count);
+            for(uint32_t i=0;i<profile->attributeCount&&profile->attributes;++i)
+                fprintf(stderr,"A5XELTE Metal vertex span attr: index=%u format=%u offset=%u buffer=%u\n",
+                    (unsigned)profile->attributes[i].index,(unsigned)profile->attributes[i].format,
+                    (unsigned)profile->attributes[i].offset,(unsigned)profile->attributes[i].bufferIndex);
+        }
+        return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"vertex-span-zero",NULL,nil,nil,nil,0);
+    }
     for(uint32_t i=0;i<profile->resourceCount;++i){const A5MaliCompiledResource*r=profile->resources+i;
         if(r->kind!=A5MaliResourceBuffer)continue;
         if(r->metalIndex>=31 || r->windowOffset || (r->flags&A5MaliResourceWrite) ||
