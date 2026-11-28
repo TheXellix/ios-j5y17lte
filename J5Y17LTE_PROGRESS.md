@@ -245,3 +245,23 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   the path_blit failure receipt), all 35 in ~1.5 s; j5-install-metal.sh
   puts them in the image. Cycle 52: 0 stages compiled on the phone; the
   only wait left (65 s, path_blit failure) is now precompiled too.
+- 2026-11-27 cycles 55-62: every frame draws (0 failed command buffers).
+  Fixed: dynamic pipeline names were autoreleased UTF8String buffers (the
+  emitter then refused every draw of the pipeline at commit, "vertex span
+  zero"); inactive RGBA16Float RT1; RAW64 RT0 store of RGBA16F blend
+  variants in the dynamic ABI; one read-only texture bound to two slots.
+  Control Center, Spotlight, notifications and their blur render.
+- 2026-11-28 speed (cycles 63-66, per-batch wall-time log with draw labels):
+  the GPU is not slow per job; each draw paid preload + writeback over its
+  whole scissor (usually the full screen). xnu patch 0032 + plugin hint
+  (A5NativeBoundsCapability): after the vertex job the kernel reads the
+  screen-space positions and shrinks the fragment job to the covered tiles
+  (median full-scissor draw 21.3 -> 7.3 ms). The shader-emulated anisotropic
+  filtering tripled CoreAnimation fixed_frag code (6672 -> 2128 bytes,
+  11 -> 6 regs); now isotropic by default (A5_SHADER_ANISOTROPY=1 restores),
+  all fragment code 406 -> 160 KiB. Open: full-screen draws with the
+  256x1 RGBA16F LUT + 32x32 texture still take ~184 ms; a full-screen clear
+  takes ~8 ms (~150 Mpixel/s) at 728 MHz / MIF 902 MHz: needs a controlled
+  GPU benchmark or performance counters. Next: draw merging per render
+  pass (one preload/writeback), variable_blur (SAMPLED_IMAGE lowering),
+  wallpaper (PosterBoard).
