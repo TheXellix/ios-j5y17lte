@@ -283,7 +283,13 @@ static int dynamic_images(uint8_t*d,const A5RuntimeMiscDraw*m){
    c.border_color_r=0;c.border_color_g=0;c.border_color_b=0;c.border_color_a=0;
   }
   unsigned q=FS_SYS+352+32*r->nativeIndex;
-  u32(d,q,levels);u32(d,q+4,im->width);u32(d,q+8,im->height);u32(d,q+12,sm->maxAnisotropy);
+  /* j5y17lte: the shader-emulated anisotropic footprint costs up to 16
+   * samples per pixel from linear textures on a single-core T830 (stretched
+   * full-screen backdrops took ~230 ms). Cap it, default isotropic;
+   * A5J5_MAX_ANISO=N (1..16) raises the cap. */
+  static unsigned anisoCap;
+  if(!anisoCap){const char*e=getenv("A5J5_MAX_ANISO");unsigned v=e?(unsigned)atoi(e):1;anisoCap=v<1?1:v>16?16:v;}
+  u32(d,q,levels);u32(d,q+4,im->width);u32(d,q+8,im->height);u32(d,q+12,sm->maxAnisotropy<anisoCap?sm->maxAnisotropy:anisoCap);
   f32(d,q+16,sm->lodMinClamp);
   f32(d,q+20,levels>1?texture_max_lod(sm,levels):(sampler->flags&A5MaliResourceImmutableSampler)?sm->lodMaxClamp:0);
   f32(d,q+24,0); /* immutable/runtime accepted states have zero LOD bias */

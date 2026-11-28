@@ -2253,9 +2253,9 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                  /* First sampled texture: size, format, mips, filters, anisotropy. */
                  for(unsigned k=0;k<31&&n>0&&n<(int)sizeof(label);k++){const A5RuntimeImage *x=&command.fragmentTextures[k];
                     if(!x->width)continue;const A5RuntimeSampler *sm=&command.fragmentSamplers[k];
-                    snprintf(label+n,sizeof(label)-n," t%ux%u f%u m%u s%u%u%u a%u",(unsigned)x->width,(unsigned)x->height,
+                    n+=snprintf(label+n,sizeof(label)-n," t%u:%ux%u f%u m%u s%u%u%u a%u",k,(unsigned)x->width,(unsigned)x->height,
                         (unsigned)x->metalPixelFormat,(unsigned)command.fragmentMips[k].levelCount,
-                        (unsigned)sm->minFilter,(unsigned)sm->magFilter,(unsigned)sm->mipFilter,(unsigned)sm->maxAnisotropy);break;}
+                        (unsigned)sm->minFilter,(unsigned)sm->magFilter,(unsigned)sm->mipFilter,(unsigned)sm->maxAnisotropy);}
                  A5MaliSetNativeDrawLabel(label);}
                 kr=A5MaliSubmitNative(client,&submit,jobs.bytes,fence);
                 logNativePhase(diagnosticID,path?"path-submit18":"misc-submit18",profile->passes[pass].passID,kr);if(kr)return kr;
