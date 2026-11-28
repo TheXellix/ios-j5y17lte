@@ -382,7 +382,15 @@ static int compile(const char *input,const char *output,mesa_shader_stage stage,
    pan_preprocess_nir(nir,inputs.gpu_id);
    struct lowering ctx={.profile=profile};
    NIR_PASS(_,nir,nir_shader_instructions_pass,lower_texture,nir_metadata_control_flow,&ctx);
-   if(dynamic&&stage==MESA_SHADER_FRAGMENT){
+   /* j5y17lte: the emulated anisotropic footprint (misc_anisotropy.h) costs
+    * ~3x the code and 11 instead of 6 work registers on CoreAnimation's
+    * fixed_frag shaders, and runs before every sample even when the loop is
+    * skipped; on the single-core T830 a full-screen layer then took ~230 ms.
+    * Default: isotropic hardware sampling (the shader_anisotropy ABI marker
+    * still states that this compiler generation owns the sampler contract).
+    * A5_SHADER_ANISOTROPY=1 restores the emulation. */
+   const char *aniso_env=getenv("A5_SHADER_ANISOTROPY");
+   if(dynamic&&stage==MESA_SHADER_FRAGMENT&&aniso_env&&!strcmp(aniso_env,"1")){
       NIR_PASS(_,nir,nir_shader_tex_pass,a5_lower_anisotropy,nir_metadata_none,NULL);
       NIR_PASS(_,nir,nir_lower_vars_to_ssa);
    }
