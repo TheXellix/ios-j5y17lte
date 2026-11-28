@@ -265,3 +265,13 @@ code must stay disabled (a5touch=0 a5touchprobe=0 a5keys=0, no a5gpu).
   GPU benchmark or performance counters. Next: draw merging per render
   pass (one preload/writeback), variable_blur (SAMPLED_IMAGE lowering),
   wallpaper (PosterBoard).
+
+### 2026-11-28 — GPU clear micro-benchmark (metal30, kernel run33)
+- BGRA8 clears, kernel batch time (submit→done): 64² 1.3 ms, 512² 1.75 ms, 750×1334 2.9 ms, 1024² 3.3 ms
+  → ~1.3 ms fixed per batch + ~1.9 ms/Mpix (~530 Mpix/s, ~2.1 GB/s; close to T830 MP1 1 px/clk @728 MHz).
+  Wall time per commit+wait is ~2.2 ms above the batch time (userland overhead).
+- Fill rate/memory is NOT the bottleneck; the 184 ms full-screen LUT draws are shader-bound. The per-commit
+  fixed cost (~3.5 ms) dominates small draws.
+- L2_MMU_CONFIG (0xf0c) reads 0 on this GPU; j5l2mmufix=1 changes nothing (identical numbers).
+- BUG: a clear-only pass on an RGBA16Float (f115) target faults the fragment job (js_status 0x58
+  DATA_INVALID_FAULT) → storage quarantined, every later commit fails e00002d8 until reboot.
