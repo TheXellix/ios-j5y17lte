@@ -523,12 +523,51 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     index:(NSUInteger)index vertex:(BOOL)vertex selector:(SEL)selector;
 @end
 
+/* j5y17lte GPU micro-benchmark (A5J5_BENCH=1 in the client's environment):
+ * 20 s after the first queue, time real native clear passes per target size
+ * and format through the normal command path; min/median wall time each. */
+static void a5j5RunBenchmark(A5MaliRestrictedDevice *device)
+{
+    static const unsigned sizes[][2]={{64,64},{256,256},{512,512},{750,1334},{1024,1024}};
+    static const MTLPixelFormat formats[]={MTLPixelFormatBGRA8Unorm,MTLPixelFormatRGBA16Float};
+    A5MaliMetalQueue *queue=[[A5MaliMetalQueue alloc] initWithDevice:device];
+    for(unsigned f=0;f<2;f++)for(unsigned z=0;z<5;z++)@autoreleasepool{
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:formats[f]
+            width:sizes[z][0] height:sizes[z][1] mipmapped:NO];
+        d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;d.storageMode=MTLStorageModePrivate;
+        id texture=[device newTextureWithDescriptor:d];
+        if(!texture){fprintf(stderr,"A5J5 bench: no texture f%lu %ux%u\n",(unsigned long)formats[f],sizes[z][0],sizes[z][1]);continue;}
+        uint64_t t[10];unsigned n=0;MTLCommandBufferStatus last=0;
+        for(unsigned i=0;i<10;i++){
+            MTLRenderPassDescriptor *p=[MTLRenderPassDescriptor renderPassDescriptor];
+            p.colorAttachments[0].texture=texture;p.colorAttachments[0].loadAction=MTLLoadActionClear;
+            p.colorAttachments[0].storeAction=MTLStoreActionStore;
+            p.colorAttachments[0].clearColor=MTLClearColorMake(i&1,.5,.25,1);
+            A5MaliMetalBuffer *b=[queue commandBuffer];
+            id e=[b renderCommandEncoderWithDescriptor:p];[e endEncoding];
+            uint64_t begin=A5MaliWallUS();[b commit];[b waitUntilCompleted];
+            t[n++]=A5MaliWallUS()-begin;last=b.status;
+        }
+        for(unsigned i=1;i<n;i++)for(unsigned j=i;j>0&&t[j]<t[j-1];j--){uint64_t x=t[j];t[j]=t[j-1];t[j-1]=x;}
+        fprintf(stderr,"A5J5 bench clear f%lu %ux%u px=%u min_us=%llu med_us=%llu max_us=%llu status=%lu\n",
+            (unsigned long)formats[f],sizes[z][0],sizes[z][1],sizes[z][0]*sizes[z][1],
+            (unsigned long long)t[0],(unsigned long long)t[n/2],(unsigned long long)t[n-1],(unsigned long)last);
+    }
+    fprintf(stderr,"A5J5 bench: done\n");
+}
+
 @implementation A5MaliRestrictedDevice (LimitedMetalSelectors)
 
 - (A5MaliMetalQueue *)newCommandQueue
 {
     A5MaliMetalQueue *queue=[[A5MaliMetalQueue alloc] initWithDevice:self];
     logQueuePhase("newCommandQueue",0,queue!=nil,&queueCreationDiagnosticCount,16);
+    static dispatch_once_t bench;
+    if(getenv("A5J5_BENCH") && !strcmp(getenv("A5J5_BENCH"),"1"))dispatch_once(&bench,^{
+        A5MaliRestrictedDevice *device=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,20*NSEC_PER_SEC),
+            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{a5j5RunBenchmark(device);});
+    });
     return queue;
 }
 

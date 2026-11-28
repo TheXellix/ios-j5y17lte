@@ -106,6 +106,12 @@ if not bb or bb.get('Label') != 'com.apple.backboardd':
     raise SystemExit('backboardd job not found in the launchd cache')
 env = dict(bb.get('EnvironmentVariables', {}))
 env['CA_IGNORE_MACH_SEND_ERRORS'] = '1'
+# J5_GPU_BENCH=1: the Metal provider runs its GPU micro-benchmark in backboardd.
+import os
+if os.environ.get('J5_GPU_BENCH') == '1':
+    env['A5J5_BENCH'] = '1'
+else:
+    env.pop('A5J5_BENCH', None)
 bb['EnvironmentVariables'] = env
 open(sys.argv[3], 'wb').write(plistlib.dumps(cache, fmt=plistlib.FMT_BINARY, sort_keys=False))
 print('launchd cache: %d jobs, compiler job added' % len(jobs))

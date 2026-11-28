@@ -1,0 +1,76 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+index ef9304e..24687e1 100644
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -222,6 +222,21 @@ j5_quirks:
+         service->setProperty("A5G3DJobResult", "t720-shader-quirk-readback-failed");
+         return false;
+     }
++    /* j5y17lte: report the inherited JM/shader/tiler/L2_MMU configuration.
++     * Panfrost and kbase clear the L2_MMU_CONFIG external read/write
++     * outstanding-transaction limits (2-bit fields at 24/26, 3-bit at 23/26)
++     * on Midgard; j5l2mmufix=1 does the same here. */
++    {
++        const uint32_t mmuOld = a5g3d_read32(gpu, 0xf0c);
++        uint32_t fix = 0;
++        if (PE_parse_boot_argn("j5l2mmufix", &fix, sizeof(fix)) && fix == 1) {
++            a5g3d_write32(gpu, 0xf0c, mmuOld & ~((7u << 23) | (7u << 26)));
++            __sync_synchronize();
++        }
++        IOLog("A5XELTE G3D: config jm=%08x shader=%08x tiler=%08x l2_mmu=%08x -> %08x (fix=%u)\n",
++            a5g3d_read32(gpu, 0xf00), a5g3d_read32(gpu, 0xf04), a5g3d_read32(gpu, 0xf08),
++            mmuOld, a5g3d_read32(gpu, 0xf0c), fix);
++    }
+     /* Match panfrost_gpu_power_on: L2, shader, then tiler. The domain
+      * and CMU gates were verified in a5g3d_probe_existing_power().
+      */
+diff --git a/iokit/Kernel/arm/A5XELTEGPUAS1.cpp b/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
+index 73a54c1..f37462a 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
+@@ -52,7 +52,35 @@ enum {
+ bool a5g3d_is_t830(void);
+ static inline uint32_t a5g3d_as1_product(void) { return a5g3d_is_t830() ? 0x830u : 0x720u; }
+ 
+-static const uint64_t kAS1PageDescriptor = 0x2c1ULL;
++/* j5y17lte: j5as1attr=N (0..7) selects the MEMATTR index of AS1 leaf
++ * entries (bits 4:2) for GPU memory-attribute experiments; default 0. */
++static uint64_t
++a5g3d_as1_page_descriptor(void)
++{
++    static uint64_t cached;
++    if (!cached) {
++        uint32_t index = 0;
++        if (!PE_parse_boot_argn("j5as1attr", &index, sizeof(index)) || index > 7)
++            index = 0;
++        cached = 0x2c1ULL | ((uint64_t)index << 2);
++    }
++    return cached;
++}
++#define kAS1PageDescriptor a5g3d_as1_page_descriptor()
++/* j5as1memattr=0xHHHHHHHH replaces the low MEMATTR word (indices 0..3). */
++static uint32_t
++a5g3d_as1_memattr(void)
++{
++    static uint32_t cached;
++    if (!cached) {
++        uint32_t value = 0;
++        cached = PE_parse_boot_argn("j5as1memattr", &value, sizeof(value)) && value ?
++            value : 0x888d88u;
++        IOLog("A5XELTE G3D AS1: memattr=%08x pte=%llx\n", cached,
++            (unsigned long long)a5g3d_as1_page_descriptor());
++    }
++    return cached;
++}
+ static_assert(kAS1TableBytes == 0x54000 &&
+     kAS1Slots * kAS1Window == kAS1JobVA - kAS1Base &&
+     kAS1PagesPerSlot * kAS1Page == kAS1Window &&
+@@ -298,7 +326,7 @@ a5g3d_as1_update(A5G3DAS1Context *ctx, bool disable)
+         const uint64_t transtab = disable ? 0 : (physical | 7u);
+         a5g3d_as1_write(gpu, 0x2440, static_cast<uint32_t>(transtab));
+         a5g3d_as1_write(gpu, 0x2444, static_cast<uint32_t>(transtab >> 32));
+-        a5g3d_as1_write(gpu, 0x2448, disable ? 0 : 0x888d88);
++        a5g3d_as1_write(gpu, 0x2448, disable ? 0 : a5g3d_as1_memattr());
+         a5g3d_as1_write(gpu, 0x244c, 0);
+         a5g3d_as1_write(gpu, 0x2470, disable ? 1u : 0u);
+         a5g3d_as1_write(gpu, 0x2474, 0u);
