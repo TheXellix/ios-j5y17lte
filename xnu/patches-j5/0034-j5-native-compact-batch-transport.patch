@@ -1,0 +1,204 @@
+j5y17lte: compact Batch20 transport (only nonzero job ranges) + ingress timing
+
+diff --git a/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp b/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
+index 64a5b0a..ae5ae52 100644
+--- a/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUUserClient.cpp
+@@ -81,6 +81,13 @@ class A5XELTEGPUUserClient : public IOUserClient {
+     bool fClosed = false;
+     bool fCompilerOnly = false;
+     A5G3DAS1Context *fAS1 = nullptr;
++    /* j5y17lte compact Batch20: persistent expanded snapshot buffer (header +
++     * A5NativeBatchMax full items) and, per item, the ranges the previous
++     * expansion wrote (fExpandFull: unknown content, zero all of it). */
++    uint8_t *fExpand = nullptr;
++    A5NativeRange fExpandRanges[A5NativeBatchMax][A5NativeCompactMaxRanges] = {};
++    uint32_t fExpandRangeCount[A5NativeBatchMax] = {};
++    bool fExpandFull[A5NativeBatchMax] = {};
+ 
+     void releaseAll();
+     bool ensureSurfaceMappingLocked(uint32_t logicalSlot,const A5GPUProtectedResources &protectedSlots);
+@@ -313,6 +320,11 @@ void
+ A5XELTEGPUUserClient::free()
+ {
+     releaseAll();
++    if (fExpand) {
++        IOFreeData(fExpand,sizeof(A5NativeBatchRequest)+
++            A5NativeBatchMax*(sizeof(A5NativeSubmitRequest)+A5NativeJobBytes));
++        fExpand = nullptr;
++    }
+     if (fLock) {
+         IOLockFree(fLock);
+         fLock = nullptr;
+@@ -347,7 +359,7 @@ A5XELTEGPUUserClient::query(IOExternalMethodArguments *args)
+         (a5g3d_as1_native_available() ? ((1u<<16)|(1u<<17)|(1u<<18)|(1u<<19)) : 0);
+     result.gpuCommandsSupported = 15 |
+         (a5g3d_as1_read_surf_available() ? 16 : 0) |
+-        (a5g3d_as1_native_available() ? (A5NativeCapability|A5NativeBatchCapability|A5NativeBoundsCapability) : 0);
++        (a5g3d_as1_native_available() ? (A5NativeCapability|A5NativeBatchCapability|A5NativeBoundsCapability|A5NativeCompactCapability) : 0);
+     memcpy(args->structureOutput, &result, sizeof(result));
+     args->structureOutputSize = sizeof(result);
+     return kIOReturnSuccess;
+diff --git a/iokit/Kernel/arm/A5XELTENativeABI.h b/iokit/Kernel/arm/A5XELTENativeABI.h
+index f76e839..af3ef71 100644
+--- a/iokit/Kernel/arm/A5XELTENativeABI.h
++++ b/iokit/Kernel/arm/A5XELTENativeABI.h
+@@ -11,7 +11,9 @@ enum { A5NativeQuerySelector=17, A5NativeSubmitSelector=18,
+        A5NativeBulkWriteSelector=19,
+        A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000,
+        /* j5y17lte: the kernel accepts a coverage hint in SubmitRequest.reserved */
+-       A5NativeBoundsCapability=128 };
++       A5NativeBoundsCapability=128,
++       /* j5y17lte: Batch20 items may carry a compact job (see below) */
++       A5NativeCompactCapability=256, A5NativeCompactMaxRanges=64 };
+ typedef struct { uint32_t version,size,reserved0,reserved1; } A5NativeHeader;
+ typedef struct {
+     A5NativeHeader header;
+@@ -118,4 +120,61 @@ static inline int A5NativeCheckJobChain(const uint8_t *p,uint32_t bytes,uint64_t
+         A5NativeJobWord(p,tiler+20)!=(1u|(2u<<16)))return -1;
+     return 1;
+ }
++/* j5y17lte compact job (A5NativeCompactCapability, Batch20 only). A job blob
++ * is 256 KiB but a draw writes a few KiB of it. An item whose jobBytes is
++ * below A5NativeJobBytes carries instead a sequence of records
++ *   { uint32 offset, uint32 length, uint64 zero } + length bytes
++ * with offset/length 16-byte multiples, length > 0, records ascending and
++ * disjoint inside the job, exactly filling jobBytes. Bytes outside every
++ * record are zero. The kernel expands it into the full snapshot before the
++ * unchanged validation, so the job topology contract is identical. */
++typedef struct { uint32_t offset,length; } A5NativeRange;
++static inline uint32_t A5NativeCompactRecordWord(const uint8_t *p,uint32_t o)
++{ return (uint32_t)p[o]|((uint32_t)p[o+1]<<8)|((uint32_t)p[o+2]<<16)|((uint32_t)p[o+3]<<24); }
++/* Validate and expand into job (A5NativeJobBytes, all zero). Records the
++ * written ranges (at most A5NativeCompactMaxRanges) so the next expansion
++ * re-zeroes only them. Returns 0 on success. */
++static inline int A5NativeCompactExpand(const uint8_t *in,uint32_t bytes,uint8_t *job,
++    A5NativeRange *ranges,uint32_t *rangeCount)
++{
++    uint32_t at=0,end=0,n=0;
++    if(!in||!job||!bytes||(bytes&15u)||bytes>=A5NativeJobBytes)return -1;
++    while(at<bytes){
++        if(bytes-at<16u)return -1;
++        uint32_t offset=A5NativeCompactRecordWord(in,at),length=A5NativeCompactRecordWord(in,at+4);
++        if(A5NativeCompactRecordWord(in,at+8)||A5NativeCompactRecordWord(in,at+12)||
++           (offset&15u)||!length||(length&15u)||offset<end||offset>A5NativeJobBytes||
++           length>A5NativeJobBytes-offset||length>bytes-at-16u||n==A5NativeCompactMaxRanges)return -1;
++        for(uint32_t i=0;i<length;i++)job[offset+i]=in[at+16u+i];
++        if(ranges)ranges[n]=(A5NativeRange){offset,length};
++        ++n;end=offset+length;at+=16u+length;
++    }
++    if(rangeCount)*rangeCount=n;
++    return 0;
++}
++/* Encode the nonzero 64-byte blocks of a full job; gaps up to two blocks
++ * are merged. Returns the compact size, or 0 when it would not be smaller
++ * than cap or needs more than A5NativeCompactMaxRanges records. */
++static inline uint32_t A5NativeCompactEncode(const uint8_t *job,uint8_t *out,uint32_t cap)
++{
++    uint32_t used=0,records=0;
++    for(uint32_t b=0;b<A5NativeJobBytes;){
++        const uint64_t *w=(const uint64_t *)(const void *)(job+b);
++        if(!(w[0]|w[1]|w[2]|w[3]|w[4]|w[5]|w[6]|w[7])){b+=64u;continue;}
++        uint32_t start=b,last=b;
++        for(b+=64u;b<A5NativeJobBytes;b+=64u){
++            w=(const uint64_t *)(const void *)(job+b);
++            if(w[0]|w[1]|w[2]|w[3]|w[4]|w[5]|w[6]|w[7])last=b;
++            else if(b-last>128u)break;
++        }
++        uint32_t length=last+64u-start;
++        if(records==A5NativeCompactMaxRanges||length+16u>cap-used)return 0;
++        uint32_t h[4]={start,length,0,0};
++        for(unsigned i=0;i<16;i++)out[used+i]=((const uint8_t *)h)[i];
++        for(uint32_t i=0;i<length;i++)out[used+16u+i]=job[start+i];
++        used+=16u+length;++records;b=last+64u;
++    }
++    return used&&used<A5NativeJobBytes?used:0;
++}
++
+ #endif
+diff --git a/iokit/Kernel/arm/A5XELTENativeClient.inc b/iokit/Kernel/arm/A5XELTENativeClient.inc
+index 6c50105..b787557 100644
+--- a/iokit/Kernel/arm/A5XELTENativeClient.inc
++++ b/iokit/Kernel/arm/A5XELTENativeClient.inc
+@@ -189,19 +189,54 @@ IOReturn A5XELTEGPUUserClient::nativeBulkWrite(IOExternalMethodArguments *args)
+ IOReturn A5XELTEGPUUserClient::nativeBatch(IOExternalMethodArguments*args){
+  if(!a5g3d_as1_native_available())return kIOReturnUnsupported;
+  if(!args||args->scalarInputCount||args->scalarOutputCount||!args->structureOutput||args->structureOutputDescriptor||args->structureOutputSize<sizeof(A5NativeBatchResult))return kIOReturnBadArgument;
++ const uint64_t ingressBegin=mach_absolute_time();
+  IOMemoryDescriptor*descriptor=args->structureInputDescriptor;
+  uint64_t bytes=descriptor?descriptor->getLength():args->structureInputSize;
+  const uint32_t stride=sizeof(A5NativeSubmitRequest)+A5NativeJobBytes;
+- if(bytes<sizeof(A5NativeBatchRequest)+stride||bytes>sizeof(A5NativeBatchRequest)+A5NativeBatchMax*stride||(!descriptor&&!args->structureInput))return kIOReturnBadArgument;
+- uint8_t*copy=static_cast<uint8_t*>(IOMallocData(bytes));if(!copy)return kIOReturnNoMemory;
+- IOReturn kr=a5gpu_copy_native_input(descriptor,args->structureInput,copy,bytes);
+- A5NativeBatchRequest header={};if(!kr)memcpy(&header,copy,sizeof(header));
+- if(kr||!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&header.header),bytes)||!header.count||header.count>A5NativeBatchMax||header.reserved||bytes!=sizeof(header)+header.count*stride){IOFreeData(copy,bytes);return kr?kr:kIOReturnBadArgument;}
++ const uint64_t expandBytes=sizeof(A5NativeBatchRequest)+A5NativeBatchMax*stride;
++ /* j5y17lte: items are full (jobBytes == A5NativeJobBytes) or compact. */
++ if(bytes<sizeof(A5NativeBatchRequest)+sizeof(A5NativeSubmitRequest)+16||bytes>expandBytes||(!descriptor&&!args->structureInput))return kIOReturnBadArgument;
++ uint8_t*input=static_cast<uint8_t*>(IOMallocData(bytes));if(!input)return kIOReturnNoMemory;
++ IOReturn kr=a5gpu_copy_native_input(descriptor,args->structureInput,input,bytes);
++ const uint64_t copyEnd=mach_absolute_time();
++ A5NativeBatchRequest header={};if(!kr)memcpy(&header,input,sizeof(header));
++ if(kr||!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&header.header),bytes)||!header.count||header.count>A5NativeBatchMax||header.reserved){IOFreeData(input,bytes);return kr?kr:kIOReturnBadArgument;}
++ IOLockLock(fLock);
++ if(!fExpand){
++  fExpand=static_cast<uint8_t*>(IOMallocData(expandBytes));
++  if(!fExpand){IOLockUnlock(fLock);IOFreeData(input,bytes);return kIOReturnNoMemory;}
++  for(unsigned i=0;i<A5NativeBatchMax;i++){fExpandFull[i]=true;fExpandRangeCount[i]=0;}
++ }
++ uint8_t*copy=fExpand;memcpy(copy,&header,sizeof(header));
++ uint64_t at=sizeof(header);unsigned compactItems=0;
++ for(unsigned i=0;i<header.count&&!kr;i++){
++  A5NativeSubmitRequest r;
++  if(bytes-at<sizeof(r)){kr=kIOReturnBadArgument;break;}
++  memcpy(&r,input+at,sizeof(r));at+=sizeof(r);
++  uint8_t*job=copy+sizeof(header)+i*stride+sizeof(r);
++  if(r.jobBytes>bytes-at){kr=kIOReturnBadArgument;break;}
++  if(r.jobBytes==A5NativeJobBytes){
++   memcpy(job,input+at,A5NativeJobBytes);fExpandFull[i]=true;fExpandRangeCount[i]=0;
++  }else{
++   if(fExpandFull[i])memset(job,0,A5NativeJobBytes);
++   else for(uint32_t k=0;k<fExpandRangeCount[i];k++)memset(job+fExpandRanges[i][k].offset,0,fExpandRanges[i][k].length);
++   fExpandFull[i]=false;fExpandRangeCount[i]=0;
++   if(A5NativeCompactExpand(input+at,r.jobBytes,job,fExpandRanges[i],&fExpandRangeCount[i])){
++    fExpandFull[i]=true;kr=kIOReturnBadArgument;break;
++   }
++   ++compactItems;
++  }
++  at+=r.jobBytes;r.jobBytes=A5NativeJobBytes;
++  memcpy(copy+sizeof(header)+i*stride,&r,sizeof(r));
++ }
++ if(!kr&&at!=bytes)kr=kIOReturnBadArgument;
++ IOFreeData(input,bytes);
++ const uint64_t expandEnd=mach_absolute_time();
++ if(kr){IOLockUnlock(fLock);return kr;}
+  A5NativeSubmitRequest first={};memcpy(&first,copy+sizeof(header),sizeof(first));
+  A5NativeBatchResult out={};out.header={1,sizeof(out),0,0};
+  uint32_t allReads=0,allWrites=0,allBuffers=0;
+  A5NativePhysicalUse uses[A5NativeBatchMax]={};
+- IOLockLock(fLock);
+  for(unsigned i=0;i<header.count;i++){
+   uint8_t*entry=copy+sizeof(header)+i*stride;A5NativeSubmitRequest r;memcpy(&r,entry,sizeof(r));
+   bool profile=r.profileID==0||(r.profileID>=99&&r.profileID<=108)||(r.profileID>=200&&r.profileID<=208)||(r.profileID>=300&&r.profileID<=302)||r.profileID==500||r.profileID==501||(r.profileID>=600&&r.profileID<=606)||r.profileID==65536;
+@@ -211,7 +246,19 @@ IOReturn A5XELTEGPUUserClient::nativeBatch(IOExternalMethodArguments*args){
+   if(kr)break;allReads|=reads;allWrites|=writes;allBuffers|=buffers;
+   uses[i]={reads,writes,buffers};
+  }
++ const uint64_t validateEnd=mach_absolute_time();
+  if(!kr)a5g3d_as1_submit_native_batch(fAS1,copy+sizeof(header),uses,header.count,allReads,allWrites,allBuffers,&out);
+- IOLockUnlock(fLock);IOFreeData(copy,bytes);if(kr)return kr;
++ IOLockUnlock(fLock);
++ static unsigned ingressReports=0;
++ if(++ingressReports<=16||!(ingressReports&255)){
++  uint64_t copyNS=0,expandNS=0,validateNS=0,totalNS=0;
++  absolutetime_to_nanoseconds(copyEnd-ingressBegin,&copyNS);
++  absolutetime_to_nanoseconds(expandEnd-copyEnd,&expandNS);
++  absolutetime_to_nanoseconds(validateEnd-expandEnd,&validateNS);
++  absolutetime_to_nanoseconds(mach_absolute_time()-ingressBegin,&totalNS);
++  IOLog("A5XELTE G3D batch ingress: sample=%u count=%u compact=%u bytes=%llu ool=%u copy_ns=%llu expand_ns=%llu validate_ns=%llu total_ns=%llu\n",
++   ingressReports,header.count,compactItems,bytes,descriptor?1u:0u,copyNS,expandNS,validateNS,totalNS);
++ }
++ if(kr)return kr;
+  memcpy(args->structureOutput,&out,sizeof(out));args->structureOutputSize=sizeof(out);return kIOReturnSuccess;
+ }

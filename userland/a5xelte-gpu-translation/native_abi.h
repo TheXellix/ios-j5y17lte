@@ -11,7 +11,9 @@ enum { A5NativeQuerySelector=17, A5NativeSubmitSelector=18,
        A5NativeBulkWriteSelector=19,
        A5NativeBulkWriteMax=0x100000, A5NativeBufferMax=0x800000,
        /* j5y17lte: the kernel accepts a coverage hint in SubmitRequest.reserved */
-       A5NativeBoundsCapability=128 };
+       A5NativeBoundsCapability=128,
+       /* j5y17lte: Batch20 items may carry a compact job (see below) */
+       A5NativeCompactCapability=256, A5NativeCompactMaxRanges=64 };
 typedef struct { uint32_t version,size,reserved0,reserved1; } A5NativeHeader;
 typedef struct {
     A5NativeHeader header;
@@ -118,4 +120,61 @@ static inline int A5NativeCheckJobChain(const uint8_t *p,uint32_t bytes,uint64_t
         A5NativeJobWord(p,tiler+20)!=(1u|(2u<<16)))return -1;
     return 1;
 }
+/* j5y17lte compact job (A5NativeCompactCapability, Batch20 only). A job blob
+ * is 256 KiB but a draw writes a few KiB of it. An item whose jobBytes is
+ * below A5NativeJobBytes carries instead a sequence of records
+ *   { uint32 offset, uint32 length, uint64 zero } + length bytes
+ * with offset/length 16-byte multiples, length > 0, records ascending and
+ * disjoint inside the job, exactly filling jobBytes. Bytes outside every
+ * record are zero. The kernel expands it into the full snapshot before the
+ * unchanged validation, so the job topology contract is identical. */
+typedef struct { uint32_t offset,length; } A5NativeRange;
+static inline uint32_t A5NativeCompactRecordWord(const uint8_t *p,uint32_t o)
+{ return (uint32_t)p[o]|((uint32_t)p[o+1]<<8)|((uint32_t)p[o+2]<<16)|((uint32_t)p[o+3]<<24); }
+/* Validate and expand into job (A5NativeJobBytes, all zero). Records the
+ * written ranges (at most A5NativeCompactMaxRanges) so the next expansion
+ * re-zeroes only them. Returns 0 on success. */
+static inline int A5NativeCompactExpand(const uint8_t *in,uint32_t bytes,uint8_t *job,
+    A5NativeRange *ranges,uint32_t *rangeCount)
+{
+    uint32_t at=0,end=0,n=0;
+    if(!in||!job||!bytes||(bytes&15u)||bytes>=A5NativeJobBytes)return -1;
+    while(at<bytes){
+        if(bytes-at<16u)return -1;
+        uint32_t offset=A5NativeCompactRecordWord(in,at),length=A5NativeCompactRecordWord(in,at+4);
+        if(A5NativeCompactRecordWord(in,at+8)||A5NativeCompactRecordWord(in,at+12)||
+           (offset&15u)||!length||(length&15u)||offset<end||offset>A5NativeJobBytes||
+           length>A5NativeJobBytes-offset||length>bytes-at-16u||n==A5NativeCompactMaxRanges)return -1;
+        for(uint32_t i=0;i<length;i++)job[offset+i]=in[at+16u+i];
+        if(ranges)ranges[n]=(A5NativeRange){offset,length};
+        ++n;end=offset+length;at+=16u+length;
+    }
+    if(rangeCount)*rangeCount=n;
+    return 0;
+}
+/* Encode the nonzero 64-byte blocks of a full job; gaps up to two blocks
+ * are merged. Returns the compact size, or 0 when it would not be smaller
+ * than cap or needs more than A5NativeCompactMaxRanges records. */
+static inline uint32_t A5NativeCompactEncode(const uint8_t *job,uint8_t *out,uint32_t cap)
+{
+    uint32_t used=0,records=0;
+    for(uint32_t b=0;b<A5NativeJobBytes;){
+        const uint64_t *w=(const uint64_t *)(const void *)(job+b);
+        if(!(w[0]|w[1]|w[2]|w[3]|w[4]|w[5]|w[6]|w[7])){b+=64u;continue;}
+        uint32_t start=b,last=b;
+        for(b+=64u;b<A5NativeJobBytes;b+=64u){
+            w=(const uint64_t *)(const void *)(job+b);
+            if(w[0]|w[1]|w[2]|w[3]|w[4]|w[5]|w[6]|w[7])last=b;
+            else if(b-last>128u)break;
+        }
+        uint32_t length=last+64u-start;
+        if(records==A5NativeCompactMaxRanges||length+16u>cap-used)return 0;
+        uint32_t h[4]={start,length,0,0};
+        for(unsigned i=0;i<16;i++)out[used+i]=((const uint8_t *)h)[i];
+        for(uint32_t i=0;i<length;i++)out[used+16u+i]=job[start+i];
+        used+=16u+length;++records;b=last+64u;
+    }
+    return used&&used<A5NativeJobBytes?used:0;
+}
+
 #endif

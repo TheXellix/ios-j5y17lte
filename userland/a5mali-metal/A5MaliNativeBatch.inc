@@ -4,7 +4,7 @@ typedef struct {
 } A5NativeUploadArena;
 typedef struct {
  A5MaliClient *client;A5MaliTransport call;void *context;
- uint8_t *packet;unsigned count,accepted;int queryValid;
+ uint8_t *packet,*compact;unsigned count,accepted;int queryValid;
  A5NativeQueryRequest query;A5NativeQueryResult mapped;
  A5MaliFence last; kern_return_t error;
  A5NativeUploadArena arenas[4];unsigned arenaResets,arenaCreates,arenaWrites,arenaReuses,awaitingUploadSubmit;
@@ -14,6 +14,10 @@ typedef struct {
  char labels[A5NativeBatchMax][160];
 } A5NativeBatchSession;
 static _Thread_local A5NativeBatchSession *nativeBatch;
+/* j5y17lte: send only the nonzero ranges of each 256 KiB job when the kernel
+ * advertises A5NativeCompactCapability (A5J5_NO_COMPACT=1 disables it; the
+ * GPU benchmark toggles it to compare both transports). */
+int a5j5CompactDisabled=-1;
 static _Thread_local char nativeDrawLabel[160];
 void A5MaliSetNativeDrawLabel(const char *label){
  if(!label)label="";strlcpy(nativeDrawLabel,label,sizeof(nativeDrawLabel));
@@ -70,6 +74,20 @@ static kern_return_t a5NativeBatchFlush(void){
  unsigned count=s->count;s->count=0;
  size_t bytes=sizeof(A5NativeBatchRequest)+count*(sizeof(A5NativeSubmitRequest)+A5NativeJobBytes);
  A5NativeBatchRequest h={{1,(uint32_t)bytes,0,0},count,0};memcpy(s->packet,&h,sizeof(h));
+ if(a5j5CompactDisabled<0)a5j5CompactDisabled=getenv("A5J5_NO_COMPACT")!=NULL;
+ const uint8_t *wire=s->packet;size_t wireBytes=bytes;
+ if(s->compact&&!a5j5CompactDisabled&&(s->client->gpuCommandsSupported&A5NativeCompactCapability)){
+  size_t at=sizeof(h);
+  for(unsigned i=0;i<count;i++){
+   const uint8_t *item=s->packet+sizeof(h)+i*(sizeof(A5NativeSubmitRequest)+A5NativeJobBytes);
+   A5NativeSubmitRequest q;memcpy(&q,item,sizeof(q));
+   uint32_t n=A5NativeCompactEncode(item+sizeof(q),s->compact+at+sizeof(q),A5NativeJobBytes);
+   if(n){q.jobBytes=n;}else{memcpy(s->compact+at+sizeof(q),item+sizeof(q),A5NativeJobBytes);n=A5NativeJobBytes;}
+   memcpy(s->compact+at,&q,sizeof(q));at+=sizeof(q)+n;
+  }
+  A5NativeBatchRequest c={{1,(uint32_t)at,0,0},count,0};memcpy(s->compact,&c,sizeof(c));
+  wire=s->compact;wireBytes=at;
+ }
  /* All staged writes target fresh, disjoint arena slices. They are CPU-only
   * mutations until this point; no pending GPU job was started on failure. */
  uint64_t uploadBegin=A5MaliWallUS();
@@ -77,11 +95,11 @@ static kern_return_t a5NativeBatchFlush(void){
  if(upload){fprintf(stderr,"A5J5 batch upload failed: kr=%x count=%u\n",(unsigned)upload,count);return s->error=upload;}
  A5NativeBatchResult r={0};size_t size=sizeof(r);submissionMayBeActive=1;
  uint64_t submitBegin=A5MaliWallUS();
- kern_return_t kr=s->call(s->context,A5NativeBatchSelector,s->packet,bytes,&r,&size);
+ kern_return_t kr=s->call(s->context,A5NativeBatchSelector,wire,wireBytes,&r,&size);
  uint64_t submitElapsed=A5MaliElapsedUS(submitBegin,A5MaliWallUS());s->submitUS+=submitElapsed;
  /* j5y17lte speed work: wall time of every kernel batch and what it held. */
  {static unsigned reports;if(++reports<=1500){
-  fprintf(stderr,"A5J5 batch time: us=%llu count=%u",(unsigned long long)submitElapsed,count);
+  fprintf(stderr,"A5J5 batch time: us=%llu count=%u wire=%zu",(unsigned long long)submitElapsed,count,wireBytes);
   for(unsigned i=0;i<count;i++)fprintf(stderr," [%s]",s->labels[i][0]?s->labels[i]:"?");
   fprintf(stderr,"\n");}}
  if(kr||r.status){
@@ -154,7 +172,8 @@ kern_return_t A5MaliBeginNativeBatch(A5MaliClient*c){
  for(unsigned i=0;i<4;i++)if(c->nativeUploadQuarantine[i])return kIOReturnNotReady;
  A5NativeBatchSession*s=calloc(1,sizeof(*s));if(!s)return kIOReturnNoMemory;
  s->packet=malloc(sizeof(A5NativeBatchRequest)+A5NativeBatchMax*(sizeof(A5NativeSubmitRequest)+A5NativeJobBytes));
- if(!s->packet){free(s);return kIOReturnNoMemory;}
+ s->compact=malloc(sizeof(A5NativeBatchRequest)+A5NativeBatchMax*(sizeof(A5NativeSubmitRequest)+A5NativeJobBytes));
+ if(!s->packet){free(s->compact);free(s);return kIOReturnNoMemory;}
  if(c->nativeUploadPool){
   A5NativeUploadPool*p=c->nativeUploadPool;memcpy(s->arenas,p->arenas,sizeof(s->arenas));
   for(unsigned i=0;i<4;i++)if(s->arenas[i].handle)++s->arenaReuses;
@@ -265,5 +284,5 @@ kern_return_t A5MaliEndNativeBatch(A5MaliClient*c,int commit,A5MaliFence*f){
   "A5XELTE Metal native grouping: queries_cached=%u query_barriers=%u mutation_barriers=%u epoch_barriers=%u capacity_flushes=%u result=%x query_us=%llu transport_us=%llu upload_us=%llu submit_us=%llu\n",
   s->queryHits,s->queryBarriers,s->mutationBarriers,s->mappingBarriers,s->capacityFlushes,(unsigned)kr,(unsigned long long)s->queryUS,(unsigned long long)s->transportUS,
   (unsigned long long)s->uploadUS,(unsigned long long)s->submitUS);}
- if(f)*f=s->last;c->call=s->call;c->context=s->context;nativeBatch=NULL;free(s->packet);free(s);return kr;
+ if(f)*f=s->last;c->call=s->call;c->context=s->context;nativeBatch=NULL;free(s->packet);free(s->compact);free(s);return kr;
 }

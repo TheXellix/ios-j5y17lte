@@ -547,7 +547,10 @@ static void a5j5RunBenchmark(A5MaliRestrictedDevice *device)
         }
         fprintf(stderr,"A5J5 bench warmup: commits=1600 us=%llu\n",(unsigned long long)(A5MaliWallUS()-begin));
     }
-    for(unsigned f=0;f<2;f++)for(unsigned z=0;z<5;z++)@autoreleasepool{
+    /* Passes: BGRA8 full 256 KiB transport, BGRA8 compact, RGBA16F compact. */
+    extern int a5j5CompactDisabled;int savedCompact=a5j5CompactDisabled;
+    for(unsigned pass=0;pass<3;pass++)for(unsigned z=0;z<5;z++)@autoreleasepool{
+        unsigned f=pass==2;a5j5CompactDisabled=pass==0?1:savedCompact;
         MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:formats[f]
             width:sizes[z][0] height:sizes[z][1] mipmapped:NO];
         d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;d.storageMode=MTLStorageModePrivate;
@@ -567,10 +570,11 @@ static void a5j5RunBenchmark(A5MaliRestrictedDevice *device)
         }
         for(unsigned i=1;i<n;i++)for(unsigned j=i;j>0&&t[j]<t[j-1];j--){uint64_t x=t[j];t[j]=t[j-1];t[j-1]=x;}
         for(unsigned i=1;i<n;i++)for(unsigned j=i;j>0&&c[j]<c[j-1];j--){uint64_t x=c[j];c[j]=c[j-1];c[j-1]=x;}
-        fprintf(stderr,"A5J5 bench clear f%lu %ux%u px=%u n=%u min_us=%llu med_us=%llu max_us=%llu commit_med_us=%llu status=%lu\n",
-            (unsigned long)formats[f],sizes[z][0],sizes[z][1],sizes[z][0]*sizes[z][1],n,
+        fprintf(stderr,"A5J5 bench clear%s f%lu %ux%u px=%u n=%u min_us=%llu med_us=%llu max_us=%llu commit_med_us=%llu status=%lu\n",
+            a5j5CompactDisabled==1?" full":" compact",(unsigned long)formats[f],sizes[z][0],sizes[z][1],sizes[z][0]*sizes[z][1],n,
             (unsigned long long)t[0],(unsigned long long)t[n/2],(unsigned long long)t[n-1],(unsigned long long)c[n/2],(unsigned long)last);
     }
+    a5j5CompactDisabled=savedCompact;
     fprintf(stderr,"A5J5 bench: done\n");
 }
 
