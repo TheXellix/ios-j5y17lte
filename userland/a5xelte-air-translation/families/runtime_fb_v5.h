@@ -99,7 +99,18 @@ a5_pack_fb_v5(uint8_t *fb, const A5FbV5 *f)
    }
    pan_section_pack(fb, FRAMEBUFFER, TILER_WEIGHTS, c) { (void)c; }
    pan_cast_and_pack(fb + A5_FB_V5_RT_OFFSET, RGB_RENDER_TARGET, c) {
+      /* Mesa get_rt_formats (v5 MFBD): a raw target's tile buffer format is
+       * RAW8..RAW128 by size. "Raw Value" is the v4 SFBD convention; with a
+       * RAW64 writeback (RGBA16Float, RG32Float) the T830 faults clear-only
+       * fragment jobs (js_status 0x58). 32-bit and smaller raw targets keep
+       * the value that already works on the phone. */
       c.internal_format = f->internal_format;
+      if (f->internal_format == MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE &&
+          f->writeback_format == MALI_COLOR_FORMAT_RAW64)
+         c.internal_format = MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW64;
+      if (f->internal_format == MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW_VALUE &&
+          f->writeback_format == MALI_COLOR_FORMAT_RAW128)
+         c.internal_format = MALI_COLOR_BUFFER_INTERNAL_FORMAT_RAW128;
       c.write_enable = true;
       c.writeback_format = f->writeback_format;
       c.writeback_block_format = MALI_BLOCK_FORMAT_LINEAR;
