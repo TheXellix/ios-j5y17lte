@@ -82,7 +82,11 @@ a5_pack_fb_v5(uint8_t *fb, const A5FbV5 *f)
       c.tie_break_rule = MALI_TIE_BREAK_RULE_MINUS_180_IN_0_OUT;
       c.effective_tile_size = 256;    /* 16x16 */
       c.render_target_count = 1;
-      c.color_buffer_allocation = 1024; /* 16x16 x 4 bytes */
+      /* Mesa pan_select_tile_size: ALIGN_POT(tib bytes/pixel x 256, 1K).
+       * RAW64 (RGBA16Float/RG32Float) needs 8 bytes/pixel: 2048. With 1024
+       * the T830 faults the fragment job (js_status 0x58 DATA_INVALID). */
+      c.color_buffer_allocation =
+         f->writeback_format == A5_CF_2x32 ? 2048 : 1024;
       c.z_internal_format = MALI_Z_INTERNAL_FORMAT_D24;
    }
    pan_section_pack(fb, FRAMEBUFFER, TILER, c) {
